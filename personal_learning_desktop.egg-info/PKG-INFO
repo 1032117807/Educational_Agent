@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: personal-learning-desktop
+Version: 1.0.0
+Summary: 完全本地运行的个性化学习助手
+Requires-Python: >=3.11
+Requires-Dist: PySide6<6.9,>=6.7
+Requires-Dist: SQLAlchemy>=2.0
+Requires-Dist: pydantic>=2.6
+Requires-Dist: pydantic-settings>=2.2
+Requires-Dist: alembic>=1.13
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: pytest-qt>=4.4; extra == "dev"
+Provides-Extra: build
+Requires-Dist: Nuitka==2.5.1; extra == "build"

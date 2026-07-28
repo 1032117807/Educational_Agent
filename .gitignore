@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest-cache/
+.pytest-tmp/
+.test-artifacts/
+.test-tmp/
+.venv/
+dist/
+build/
+.build-cache/
+*.dist/
+*.build/
+*.spec
+data/
+!data/.gitkeep

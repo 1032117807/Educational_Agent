@@ -1,0 +1,12 @@
+PySide6<6.9,>=6.7
+SQLAlchemy>=2.0
+pydantic>=2.6
+pydantic-settings>=2.2
+alembic>=1.13
+
+[build]
+Nuitka==2.5.1
+
+[dev]
+pytest>=8
+pytest-qt>=4.4
