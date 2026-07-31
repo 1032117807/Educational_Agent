@@ -8,8 +8,21 @@ Requires-Dist: SQLAlchemy>=2.0
 Requires-Dist: pydantic>=2.6
 Requires-Dist: pydantic-settings>=2.2
 Requires-Dist: alembic>=1.13
+Requires-Dist: langchain-core<2.0,>=1.0
+Requires-Dist: langchain-openai<2.0,>=1.0
+Requires-Dist: langchain-huggingface<2.0,>=1.0
+Requires-Dist: langchain-chroma<2.0,>=1.0
+Requires-Dist: langchain-text-splitters<2.0,>=1.0
+Requires-Dist: sentence-transformers<6.0,>=5.0
+Requires-Dist: chromadb<2.0,>=1.0
+Requires-Dist: PyMuPDF>=1.24
+Requires-Dist: python-docx>=1.1
+Requires-Dist: python-pptx>=1.0
+Requires-Dist: jieba<1.0,>=0.42
 Provides-Extra: dev
 Requires-Dist: pytest>=8; extra == "dev"
 Requires-Dist: pytest-qt>=4.4; extra == "dev"
 Provides-Extra: build
 Requires-Dist: Nuitka==2.5.1; extra == "build"
+Provides-Extra: ocr
+Requires-Dist: paddleocr<4,>=3.5; extra == "ocr"

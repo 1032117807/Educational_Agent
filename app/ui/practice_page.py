@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 from pathlib import Path
+from collections.abc import Callable
 
 from PySide6.QtCharts import (
     QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QDateTimeAxis,
@@ -23,6 +24,16 @@ from app.services.domain import (
 from app.tools.registry import ToolRegistry
 from app.ui.pages import page_title, stat_card
 from app.ui.icons import IconProvider
+from ai.chains import (
+    KnowledgeDraftService,
+    KnowledgeExtractionService,
+    QuestionDraftService,
+    QuestionGenerationService,
+    SubjectiveGradingService,
+)
+from ai.retrieval import KnowledgePointIndex
+from app.ui.knowledge_extraction_widget import KnowledgeExtractionWidget
+from app.ui.question_generation_widget import QuestionGenerationWidget
 
 
 def _selected_id(table: QTableWidget) -> int | None:
@@ -91,14 +102,81 @@ class QuestionDialog(QDialog):
             self.difficulty.setValue(question.difficulty)
 
 
+class SubjectiveGradingSignals(QObject):
+    succeeded = Signal(object)
+    failed = Signal(str)
+    finished = Signal()
+
+
+class SubjectiveGradingWorker(QRunnable):
+    def __init__(self, *, grading_factory, jobs: JobService, job_id: int, attempt_id: int) -> None:
+        super().__init__()
+        self.grading_factory = grading_factory
+        self.jobs = jobs
+        self.job_id = job_id
+        self.attempt_id = attempt_id
+        self.signals = SubjectiveGradingSignals()
+        self.setAutoDelete(False)
+
+    def run(self) -> None:
+        try:
+            if self.jobs.is_cancelled(self.job_id):
+                self.signals.failed.emit("批改任务已取消")
+                return
+            self.jobs.update(self.job_id, "running", 10, "正在准备主观题批改")
+            result = self.grading_factory().grade_attempt(self.attempt_id)
+            self.jobs.update(
+                self.job_id, "completed", 100,
+                f"批改完成，得分 {result.total_score:.1f}/{result.max_score:.1f}",
+            )
+            self.signals.succeeded.emit(result)
+        except Exception as exc:
+            self.jobs.update(self.job_id, "failed", 100, "主观题批改失败", str(exc))
+            self.signals.failed.emit(str(exc))
+        finally:
+            self.signals.finished.emit()
+
+
+class SubjectiveGradingDialog(QDialog):
+    def __init__(self, result: object, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("AI 主观题批改")
+        self.resize(760, 620)
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel(f"总分：{result.total_score:.1f} / {result.max_score:.1f}"))
+        root.addWidget(QLabel(f"置信度：{result.confidence:.0%}"))
+        if result.needs_human_review:
+            warning = QLabel("建议人工复核：当前批改置信度不足或证据不充分。")
+            warning.setStyleSheet("color: #c0392b; font-weight: 600;")
+            root.addWidget(warning)
+        text = QPlainTextEdit()
+        text.setReadOnly(True)
+        lines = ["【总体反馈】", result.feedback, "", "【引用依据】"]
+        for citation in result.citations:
+            lines.extend([
+                f"[D{citation.number}] {citation.source_name} {citation.location_label}",
+                citation.quote_text,
+            ])
+        text.setPlainText("\n".join(lines))
+        root.addWidget(text)
+        close = QDialogButtonBox(QDialogButtonBox.Close)
+        close.rejected.connect(self.reject)
+        root.addWidget(close)
+
+
 class PracticeDialog(QDialog):
     def __init__(
         self, service: QuestionService, parent: QWidget | None = None,
-        resumed: tuple[object, list[object]] | None = None, immediate_feedback: bool = True
+        resumed: tuple[object, list[object]] | None = None, immediate_feedback: bool = True,
+        *, jobs: JobService | None = None,
+        grading_factory: Callable[[], SubjectiveGradingService] | None = None
     ) -> None:
         super().__init__(parent)
         self.service = service
         self.immediate_feedback = immediate_feedback
+        self.jobs = jobs
+        self.grading_factory = grading_factory
+        self.grading_worker = None
         self.setWindowTitle("快速练习")
         self.resize(700, 520)
         self.practice, self.questions = resumed or service.create_practice(10, seed=None)
@@ -125,7 +203,10 @@ class PracticeDialog(QDialog):
         mark.clicked.connect(self.mark)
         finish = QPushButton("结束练习")
         finish.clicked.connect(self.finish)
-        for button in (previous, submit, next_button, mark, finish):
+        self.ai_grade_button = QPushButton("AI 批改")
+        self.ai_grade_button.clicked.connect(self.ai_grade)
+        self.ai_grade_button.setEnabled(jobs is not None and grading_factory is not None)
+        for button in (previous, submit, next_button, mark, self.ai_grade_button, finish):
             buttons.addWidget(button)
         root.addWidget(self.progress)
         root.addWidget(self.prompt)
@@ -157,6 +238,36 @@ class PracticeDialog(QDialog):
             self.feedback.setText(("回答正确" if correct else f"回答错误；标准答案：{question.answer}") if correct is not None else "已记录自评")
         else:
             self.feedback.setText("答案已保存，提交整套练习后查看结果。")
+
+    def ai_grade(self) -> None:
+        question = self.questions[self.index]
+        if question.kind != "简答题":
+            QMessageBox.information(self, "无法批改", "AI 批改目前只支持简答题。")
+            return
+        if not self.response.toPlainText().strip():
+            QMessageBox.warning(self, "答案为空", "请先输入答案并提交本题。")
+            return
+        self.save_current_draft()
+        attempt_id = self.service.get_attempt_id(self.practice.id, question.id)
+        if attempt_id is None or self.jobs is None or self.grading_factory is None:
+            QMessageBox.warning(self, "无法批改", "请先提交本题，并确认 AI 服务已配置。")
+            return
+        job = self.jobs.create("subjective_grading", f"批改题目：{question.prompt[:80]}")
+        self.ai_grade_button.setEnabled(False)
+        self.feedback.setText("AI 正在批改，请稍候……")
+        worker = SubjectiveGradingWorker(
+            grading_factory=self.grading_factory, jobs=self.jobs,
+            job_id=job.id, attempt_id=attempt_id,
+        )
+        worker.signals.succeeded.connect(lambda result: SubjectiveGradingDialog(result, self).exec())
+        worker.signals.failed.connect(lambda message: self.show_grading_error(message))
+        worker.signals.finished.connect(lambda: self.ai_grade_button.setEnabled(True))
+        self.grading_worker = worker
+        QThreadPool.globalInstance().start(worker)
+
+    def show_grading_error(self, message: str) -> None:
+        self.feedback.setText(f"AI 批改失败：{message}")
+        QMessageBox.warning(self, "AI 批改失败", message)
 
     def previous(self) -> None:
         self.save_current_draft()
@@ -193,9 +304,23 @@ class PracticeDialog(QDialog):
 
 
 class PracticePage(QWidget):
-    def __init__(self, service: QuestionService) -> None:
+    def __init__(
+        self,
+        service: QuestionService,
+        *,
+        resources: ResourceService | None = None,
+        jobs: JobService | None = None,
+        extraction_factory: Callable[[], KnowledgeExtractionService] | None = None,
+        knowledge_index_factory: Callable[[], KnowledgePointIndex] | None = None,
+        question_generation_factory: Callable[
+            [], QuestionGenerationService
+        ] | None = None,
+        grading_factory: Callable[[], SubjectiveGradingService] | None = None,
+    ) -> None:
         super().__init__()
         self.service = service
+        self.jobs = jobs
+        self.grading_factory = grading_factory
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.addLayout(page_title("练习中心", "管理本地题库并开始可恢复、可判分的练习"))
@@ -250,10 +375,35 @@ class PracticePage(QWidget):
         self.knowledge_table.horizontalHeader().setStretchLastSection(True)
         knowledge_layout.addLayout(knowledge_bar)
         knowledge_layout.addWidget(self.knowledge_table)
+        self.knowledge_extraction_widget = None
+        if resources and jobs and extraction_factory and knowledge_index_factory:
+            self.knowledge_extraction_widget = KnowledgeExtractionWidget(
+                resources=resources,
+                jobs=jobs,
+                draft_service=KnowledgeDraftService(
+                    service.database,
+                    knowledge_index_factory=knowledge_index_factory,
+                ),
+                extraction_factory=extraction_factory,
+                index_factory=knowledge_index_factory,
+            )
+            self.knowledge_extraction_widget.knowledge_changed.connect(self.refresh)
+            knowledge_layout.addWidget(self.knowledge_extraction_widget, 1)
         tabs = QTabWidget()
         tabs.addTab(self.table, "题库管理")
         tabs.addTab(self.sessions, "练习记录")
         tabs.addTab(knowledge_page, "知识点")
+        self.question_generation_widget = None
+        if resources and jobs and question_generation_factory:
+            self.question_generation_widget = QuestionGenerationWidget(
+                resources=resources,
+                jobs=jobs,
+                draft_service=QuestionDraftService(service.database),
+                generation_factory=question_generation_factory,
+            )
+            self.question_generation_widget.questions_changed.connect(self.refresh)
+            tabs.addTab(self.question_generation_widget, "AI 出题")
+        self.tabs = tabs
         root.addWidget(tabs)
         self.refresh()
 
@@ -285,6 +435,10 @@ class PracticePage(QWidget):
                 courses.get(item.course_id, "未知课程"), item.name, f"{item.mastery}%"
             )):
                 self.knowledge_table.setItem(row, column, QTableWidgetItem(text))
+        if self.knowledge_extraction_widget is not None:
+            self.knowledge_extraction_widget.refresh_scopes()
+        if self.question_generation_widget is not None:
+            self.question_generation_widget.refresh_scopes()
 
     def create(self) -> None:
         dialog = QuestionDialog(self.service, self)
@@ -388,6 +542,7 @@ class PracticePage(QWidget):
             )
             PracticeDialog(
                 self.service, self, prepared, feedback.currentText() == "即时显示答案"
+                , jobs=self.jobs, grading_factory=self.grading_factory
             ).exec()
             self.refresh()
         except ValueError as error:
@@ -398,7 +553,10 @@ class PracticePage(QWidget):
         if not resumed:
             QMessageBox.information(self, "继续练习", "没有未完成的练习。")
             return
-        PracticeDialog(self.service, self, resumed).exec()
+        PracticeDialog(
+            self.service, self, resumed,
+            jobs=self.jobs, grading_factory=self.grading_factory
+        ).exec()
         self.refresh()
 
     def show_result(self, _index: object | None = None) -> None:

@@ -18,6 +18,18 @@ from app.models import (
 )
 
 
+INDEX_STATUS_LABELS = {
+    "not_indexed": "未解析",
+    "pending": "等待中",
+    "parsing": "解析中",
+    "parsed": "待向量化",
+    "embedding": "向量化中",
+    "completed": "索引完成",
+    "failed": "解析失败",
+    "stale": "需重建",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class IngestionResult:
     document_index_id: int
@@ -73,7 +85,7 @@ class DocumentIngestionPipeline:
 
         if (
             existing is not None
-            and existing.status == "completed"
+            and existing.status in {"parsed", "completed"}
             and not force
         ):
             return IngestionResult(
@@ -110,7 +122,7 @@ class DocumentIngestionPipeline:
             document_index_id=index_id,
             resource_id=resource.id,
             chunk_count=len(chunks),
-            status="completed",
+            status="parsed",
             reused=False,
         )
 
@@ -296,11 +308,21 @@ class DocumentIngestionPipeline:
                     )
                 )
 
-            index.status = "completed"
+            index.status = "parsed"
             index.chunk_count = len(chunks)
             index.error_message = ""
             index.updated_at = datetime.now()
-            index.completed_at = datetime.now()
+            index.completed_at = None
+
+    def current_index_id(self, resource_id: int) -> int | None:
+        with self.database.session() as session:
+            item = session.scalar(
+                select(DocumentIndex)
+                .where(DocumentIndex.resource_id == resource_id)
+                .order_by(DocumentIndex.updated_at.desc())
+                .limit(1)
+            )
+        return item.id if item else None
 
     def _mark_failed(
         self,

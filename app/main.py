@@ -6,6 +6,30 @@ import sys
 import traceback
 from pathlib import Path
 
+# The managed Windows environment may block unsigned PyTorch DLLs. Optional
+# tokenizer integrations must not auto-import torch while the GUI is starting.
+# Features that explicitly need the local embedding backend report their own
+# actionable error instead.
+os.environ.setdefault("USE_TORCH", "0")
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+
+_QT_PLUGIN_ROOT: Path | None = None
+if sys.platform == "win32":
+    candidate = (
+        Path(sys.prefix)
+        / "Lib"
+        / "site-packages"
+        / "PySide6"
+        / "plugins"
+    )
+    if (candidate / "platforms" / "qwindows.dll").is_file():
+        _QT_PLUGIN_ROOT = candidate
+        os.environ["QT_PLUGIN_PATH"] = str(candidate)
+        os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(
+            candidate / "platforms"
+        )
+
+from PySide6.QtCore import QCoreApplication
 from PySide6.QtGui import QFontDatabase, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -48,6 +72,8 @@ def release_smoke_test() -> int:
 def main() -> int:
     if "--smoke-test" in sys.argv:
         return release_smoke_test()
+    if _QT_PLUGIN_ROOT is not None:
+        QCoreApplication.setLibraryPaths([str(_QT_PLUGIN_ROOT)])
     app = QApplication(sys.argv)
     app.setApplicationName("个性化学习助手")
     icon_path = Path(__file__).resolve().parent / "resources" / "app_icon.svg"

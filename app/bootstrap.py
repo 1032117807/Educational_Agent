@@ -6,6 +6,7 @@ import sys
 
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import inspect
 
 from app.core.config import AppSettings, settings
 from app.core.logging import configure_logging
@@ -23,7 +24,10 @@ def bootstrap(config: AppSettings = settings) -> tuple[LearningService, AppSetti
         Path(__file__).resolve().parents[1] / "alembic.ini",
     ]
     migration_config = next((path for path in migration_candidates if path.exists()), None)
-    if not database_existed and migration_config is not None:
+    has_migration_state = inspect(database.engine).has_table("alembic_version")
+    if migration_config is not None and (
+        not database_existed or has_migration_state
+    ):
         try:
             alembic = Config(str(migration_config))
             alembic.attributes["database_url"] = config.database_url

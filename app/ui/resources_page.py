@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -23,6 +25,9 @@ from app.services.domain import (
 from app.tools.registry import ToolRegistry
 from app.ui.pages import page_title, stat_card
 from app.ui.icons import IconProvider
+from ai.chains import GroundedQAService
+from ai.indexing import ResourceIndexingPipeline
+from app.ui.resource_qa_widget import ResourceQAWidget
 
 
 def _selected_id(table: QTableWidget) -> int | None:
@@ -72,19 +77,94 @@ class ImportWorker(QRunnable):
             self.signals.finished.emit(False, str(error))
 
 
+_INDEX_LOCK = threading.Lock()
+
+
+class IndexSignals(QObject):
+    finished = Signal(bool, str, int)
+
+
+class ResourceIndexWorker(QRunnable):
+    """Run OCR, chunking, FTS and vector indexing off the UI thread."""
+
+    def __init__(
+        self,
+        *,
+        pipeline_factory: Callable[[], ResourceIndexingPipeline],
+        jobs: JobService,
+        job_id: int,
+        resource_id: int,
+        force: bool,
+    ) -> None:
+        super().__init__()
+        self.pipeline_factory = pipeline_factory
+        self.jobs = jobs
+        self.job_id = job_id
+        self.resource_id = resource_id
+        self.force = force
+        self.signals = IndexSignals()
+
+    def run(self) -> None:
+        try:
+            self.jobs.update(self.job_id, "running", 5, "正在准备资料解析")
+            with _INDEX_LOCK:
+                pipeline = self.pipeline_factory()
+                result = pipeline.index_resource(
+                    self.resource_id,
+                    force=self.force,
+                    progress=lambda value: self.jobs.update(
+                        self.job_id,
+                        "running",
+                        value,
+                        "正在解析并建立检索索引",
+                    ),
+                    should_cancel=lambda: self.jobs.is_cancelled(self.job_id),
+                )
+            message = (
+                f"索引完成：{result.chunk_count} 个片段，"
+                f"{result.vector_count} 个向量"
+            )
+            self.jobs.update(self.job_id, "completed", 100, message)
+            self.signals.finished.emit(True, message, self.resource_id)
+        except InterruptedError as exc:
+            self.jobs.update(self.job_id, "cancelled", 100, str(exc))
+            self.signals.finished.emit(False, str(exc), self.resource_id)
+        except Exception as exc:
+            self.jobs.update(
+                self.job_id,
+                "failed",
+                100,
+                detail="资料索引失败",
+                error=str(exc),
+            )
+            self.signals.finished.emit(False, str(exc), self.resource_id)
+
+
 class ResourcesPage(QWidget):
-    def __init__(self, service: ResourceService, jobs: JobService) -> None:
+    jobs_changed = Signal()
+
+    def __init__(
+        self,
+        service: ResourceService,
+        jobs: JobService,
+        *,
+        indexing_factory: Callable[[], ResourceIndexingPipeline],
+        qa_factory: Callable[[], GroundedQAService],
+    ) -> None:
         super().__init__()
         self.service = service
         self.jobs = jobs
+        self.indexing_factory = indexing_factory
         self.pool = QThreadPool.globalInstance()
-        self._workers: list[ImportWorker] = []
+        self._workers: list[QRunnable] = []
+        self._indexing_ids: set[int] = set()
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.addLayout(page_title("学习资料", "文件会复制到受管 workspace，可安全预览和恢复"))
         actions = QGridLayout()
         for index, (text, slot) in enumerate([
             ("添加文件", self.import_file), ("添加目录", self.import_directory),
+            ("解析并建立索引", self.build_index), ("强制重建索引", self.rebuild_index),
             ("新建文件夹", self.create_folder), ("移动", self.move_file),
             ("重命名", self.rename), ("关联/标签", self.metadata),
             ("移到回收站", self.trash), ("恢复", self.restore), ("彻底删除", self.delete_permanently),
@@ -129,7 +209,16 @@ class ResourcesPage(QWidget):
         self.views.addWidget(splitter)
         self.views.addWidget(card_scroll)
         self.view_mode.currentIndexChanged.connect(self.views.setCurrentIndex)
-        root.addWidget(self.views, 1)
+        self.qa_widget = ResourceQAWidget(
+            resources=self.service,
+            jobs=self.jobs,
+            qa_factory=qa_factory,
+        )
+        self.qa_widget.jobs_changed.connect(self.jobs_changed.emit)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.views, "资料管理")
+        self.tabs.addTab(self.qa_widget, "资料问答")
+        root.addWidget(self.tabs, 1)
         self.refresh()
 
     def refresh(self) -> None:
@@ -170,6 +259,7 @@ class ResourcesPage(QWidget):
             )
             card_layout.addWidget(open_button)
             self.card_grid.addWidget(card, row // 4, row % 4)
+        self.qa_widget.refresh_scopes()
 
     @staticmethod
     def _size(size: int) -> str:
@@ -197,13 +287,89 @@ class ResourcesPage(QWidget):
         worker.signals.finished.connect(lambda ok, message, item=worker: self._import_finished(ok, message, item))
         self._workers.append(worker)
         self.pool.start(worker)
+        self.jobs_changed.emit()
 
     def _import_finished(self, ok: bool, message: str, worker: ImportWorker) -> None:
         if worker in self._workers:
             self._workers.remove(worker)
         self.refresh()
+        self.jobs_changed.emit()
         (QMessageBox.information if ok else QMessageBox.warning)(
             self, "导入完成" if ok else "导入失败", message
+        )
+
+    def build_index(self) -> None:
+        self._start_index(force=False)
+
+    def rebuild_index(self) -> None:
+        resource_id = _selected_id(self.table)
+        if resource_id is None:
+            QMessageBox.information(self, "资料索引", "请先选择资料。")
+            return
+        answer = QMessageBox.question(
+            self,
+            "强制重建",
+            "将重新解析、切片并生成向量。是否继续？",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if answer == QMessageBox.Yes:
+            self._start_index(force=True)
+
+    def _start_index(self, *, force: bool) -> None:
+        resource_id = _selected_id(self.table)
+        if resource_id is None:
+            QMessageBox.information(self, "资料索引", "请先选择资料。")
+            return
+        if resource_id in self._indexing_ids:
+            QMessageBox.information(self, "资料索引", "这份资料已经在索引队列中。")
+            return
+        try:
+            path = self.service.content_path(resource_id)
+            payload = json.dumps(
+                {"resource_id": resource_id, "force": force},
+                ensure_ascii=False,
+            )
+            job = self.jobs.create(
+                "document_index",
+                f"建立索引：{path.name}",
+                payload=payload,
+            )
+            worker = ResourceIndexWorker(
+                pipeline_factory=self.indexing_factory,
+                jobs=self.jobs,
+                job_id=job.id,
+                resource_id=resource_id,
+                force=force,
+            )
+            worker.signals.finished.connect(
+                lambda ok, message, finished_id, item=worker: self._index_finished(
+                    ok, message, finished_id, item
+                )
+            )
+            self._indexing_ids.add(resource_id)
+            self._workers.append(worker)
+            self.pool.start(worker)
+            self.jobs_changed.emit()
+            QMessageBox.information(self, "资料索引", "任务已经加入后台队列。")
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "无法建立索引", str(exc))
+
+    def _index_finished(
+        self,
+        ok: bool,
+        message: str,
+        resource_id: int,
+        worker: ResourceIndexWorker,
+    ) -> None:
+        self._indexing_ids.discard(resource_id)
+        if worker in self._workers:
+            self._workers.remove(worker)
+        self.refresh()
+        self.jobs_changed.emit()
+        (QMessageBox.information if ok else QMessageBox.warning)(
+            self,
+            "资料索引完成" if ok else "资料索引失败",
+            message,
         )
 
     def rename(self) -> None:

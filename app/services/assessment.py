@@ -232,6 +232,14 @@ class QuestionService:
             session.flush()
             return correct
 
+    def get_attempt_id(self, session_id: int, question_id: int) -> int | None:
+        with self.database.session() as session:
+            attempt = session.scalar(select(QuestionAttempt).where(
+                QuestionAttempt.session_id == session_id,
+                QuestionAttempt.question_id == question_id,
+            ))
+            return attempt.id if attempt else None
+
     def finish(self, session_id: int, duration_seconds: int) -> PracticeSession:
         with self.database.session() as session:
             practice = session.get(PracticeSession, session_id)

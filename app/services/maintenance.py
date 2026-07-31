@@ -339,9 +339,19 @@ class JobService:
                 job.finished_at = datetime.now()
             return len(jobs)
 
-    def create(self, job_type: str, detail: str = "") -> BackgroundJob:
+    def create(
+        self,
+        job_type: str,
+        detail: str = "",
+        *,
+        payload: str | None = None,
+    ) -> BackgroundJob:
         with self.database.session() as session:
-            item = BackgroundJob(job_type=job_type, detail=detail, payload=detail)
+            item = BackgroundJob(
+                job_type=job_type,
+                detail=detail,
+                payload=detail if payload is None else payload,
+            )
             session.add(item)
             session.flush()
             return item

@@ -20,7 +20,13 @@ class AISettings(BaseSettings):
     base_url: str | None = None
 
     chat_model: str = "gpt-4.1-mini"
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = "BAAI/bge-small-zh-v1.5"
+    embedding_device: Literal["cpu", "cuda", "mps"] = "cpu"
+    embedding_normalize: bool = True
+    embedding_local_files_only: bool = True
+    embedding_model_dir: Path = Path(
+        "models/fastembed/bge-small-zh-v1.5"
+    )
 
     temperature: float = Field(default=0.1, ge=0.0, le=2.0)
     request_timeout_seconds: float = Field(default=60.0, gt=0)
@@ -38,6 +44,20 @@ class AISettings(BaseSettings):
     ocr_dpi: int = Field(default=300, ge=150, le=600)
     ocr_min_native_characters: int = Field(default=30, ge=0, le=1000)
     ocr_min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    ocr_detection_model_name: str = "PP-OCRv5_mobile_det"
+    ocr_detection_model_dir: Path = Path(
+        "models/paddleocr/PP-OCRv5_mobile_det_infer"
+    )
+    ocr_recognition_model_name: str = "PP-OCRv5_mobile_rec"
+    ocr_recognition_model_dir: Path = Path(
+        "models/paddleocr/PP-OCRv5_mobile_rec_infer"
+    )
+    ocr_use_doc_orientation: bool = False
+    ocr_use_textline_orientation: bool = False
+    ocr_enable_mkldnn: bool = False
+
+    embedding_batch_size: int = Field(default=32, ge=1, le=256)
+    vector_collection_prefix: str = "learning_chunks"
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -3,8 +3,6 @@ from __future__ import annotations
 import hashlib
 import re
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
 from ai.models import ChunkDraft, ParsedDocument, ParsedSection
 
 
@@ -47,6 +45,13 @@ class CitationAwareSplitter:
 
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+
+        # Import lazily: langchain-text-splitters imports optional
+        # sentence-transformers modules from its package initializer, which in
+        # turn loads PyTorch. Document splitting itself does not need PyTorch,
+        # and a blocked optional native DLL must not prevent the desktop app
+        # from starting.
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
 
         self._splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,

@@ -67,3 +67,37 @@ def test_create_schema_adds_ai_tables_to_existing_database(tmp_path):
     } <= tables
 
     database.close()
+
+
+def test_create_schema_adds_knowledge_vector_columns(tmp_path):
+    path = tmp_path / "legacy-knowledge.db"
+    connection = sqlite3.connect(path)
+    connection.execute(
+        "CREATE TABLE knowledge_points ("
+        "id INTEGER PRIMARY KEY, "
+        "name VARCHAR(160) NOT NULL"
+        ")"
+    )
+    connection.execute(
+        "INSERT INTO knowledge_points (id, name) VALUES (1, '函数极限')"
+    )
+    connection.commit()
+    connection.close()
+
+    database = Database(f"sqlite:///{path.as_posix()}")
+    database.create_schema()
+
+    with database.engine.connect() as upgraded:
+        columns = {
+            row[1]
+            for row in upgraded.exec_driver_sql(
+                "PRAGMA table_info(knowledge_points)"
+            )
+        }
+        name = upgraded.exec_driver_sql(
+            "SELECT name FROM knowledge_points WHERE id=1"
+        ).scalar()
+
+    assert {"vector_id", "embedding_model"} <= columns
+    assert name == "函数极限"
+    database.close()

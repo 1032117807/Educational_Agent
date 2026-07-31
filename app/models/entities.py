@@ -98,6 +98,20 @@ class KnowledgePoint(Base):
     name: Mapped[str] = mapped_column(String(160), index=True)
     mastery: Mapped[int] = mapped_column(Integer, default=0)
     note: Mapped[str] = mapped_column(Text, default="")
+    category: Mapped[str] = mapped_column(String(30), default="概念")
+    definition: Mapped[str] = mapped_column(Text, default="")
+    formula: Mapped[str] = mapped_column(Text, default="")
+    prerequisites_json: Mapped[str] = mapped_column(Text, default="[]")
+    related_points_json: Mapped[str] = mapped_column(Text, default="[]")
+    common_mistakes_json: Mapped[str] = mapped_column(Text, default="[]")
+    difficulty: Mapped[int] = mapped_column(Integer, default=3)
+    importance: Mapped[int] = mapped_column(Integer, default=3)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    source: Mapped[str] = mapped_column(String(20), default="user")
+    vector_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, unique=True
+    )
+    embedding_model: Mapped[str] = mapped_column(String(160), default="")
 
 
 class PracticeSession(Base):

@@ -81,7 +81,7 @@ def test_ingestion_stores_chunks_and_locations(tmp_path) -> None:
 
     result = pipeline.ingest(resource_id)
 
-    assert result.status == "completed"
+    assert result.status == "parsed"
     assert result.reused is False
     assert result.chunk_count > 1
 
@@ -99,7 +99,7 @@ def test_ingestion_stores_chunks_and_locations(tmp_path) -> None:
         )
 
         assert index is not None
-        assert index.status == "completed"
+        assert index.status == "parsed"
         assert index.chunk_count == len(chunks)
 
         assert [chunk.chunk_number for chunk in chunks] == list(

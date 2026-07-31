@@ -475,6 +475,13 @@ class DocumentParserRegistry:
         ocr_dpi: int = 300,
         ocr_min_native_characters: int = 30,
         ocr_min_confidence: float = 0.5,
+        ocr_detection_model_name: str = "PP-OCRv5_mobile_det",
+        ocr_detection_model_dir: Path | None = None,
+        ocr_recognition_model_name: str = "PP-OCRv5_mobile_rec",
+        ocr_recognition_model_dir: Path | None = None,
+        ocr_use_doc_orientation: bool = False,
+        ocr_use_textline_orientation: bool = False,
+        ocr_enable_mkldnn: bool = False,
     ) -> None:
         service = ocr_service
 
@@ -483,6 +490,13 @@ class DocumentParserRegistry:
                 language=ocr_language,
                 device=ocr_device,
                 min_confidence=ocr_min_confidence,
+                detection_model_name=ocr_detection_model_name,
+                detection_model_dir=ocr_detection_model_dir,
+                recognition_model_name=ocr_recognition_model_name,
+                recognition_model_dir=ocr_recognition_model_dir,
+                use_doc_orientation=ocr_use_doc_orientation,
+                use_textline_orientation=ocr_use_textline_orientation,
+                enable_mkldnn=ocr_enable_mkldnn,
             )
 
         parsers: list[BaseDocumentParser] = [
@@ -544,4 +558,11 @@ def create_document_parser_registry() -> DocumentParserRegistry:
         ocr_dpi=settings.ocr_dpi,
         ocr_min_native_characters=settings.ocr_min_native_characters,
         ocr_min_confidence=settings.ocr_min_confidence,
+        ocr_detection_model_name=settings.ocr_detection_model_name,
+        ocr_detection_model_dir=settings.ocr_detection_model_dir,
+        ocr_recognition_model_name=settings.ocr_recognition_model_name,
+        ocr_recognition_model_dir=settings.ocr_recognition_model_dir,
+        ocr_use_doc_orientation=settings.ocr_use_doc_orientation,
+        ocr_use_textline_orientation=settings.ocr_use_textline_orientation,
+        ocr_enable_mkldnn=settings.ocr_enable_mkldnn,
     )

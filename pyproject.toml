@@ -13,10 +13,20 @@ dependencies = [
   "pydantic>=2.6",
   "pydantic-settings>=2.2",
   "alembic>=1.13",
+  "langchain-core>=1.0,<2.0",
+  "langchain-openai>=1.0,<2.0",
+  "langchain-chroma>=1.0,<2.0",
+  "langchain-text-splitters>=1.0,<2.0",
+  "fastembed>=0.8,<1.0",
+  "chromadb>=1.0,<2.0",
+  "PyMuPDF>=1.24",
+  "python-docx>=1.1",
+  "python-pptx>=1.0",
+  "jieba>=0.42,<1.0",
 ]
 
 [project.optional-dependencies]
-dev = ["langchain-text-splitters>=1.0,<2.0", "pytest>=8", "pytest-qt>=4.4"]
+dev = ["pytest>=8", "pytest-qt>=4.4"]
 build = ["Nuitka==2.5.1"]
 ocr = [
   "paddleocr>=3.5,<4",
@@ -28,4 +38,4 @@ qt_api = "pyside6"
 addopts = "-q -p no:cacheprovider"
 
 [tool.setuptools.packages.find]
-include = ["app*"]
+include = ["app*", "ai*"]

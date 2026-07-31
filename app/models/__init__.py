@@ -23,7 +23,12 @@ from app.models.ai_entities import (
     DocumentChunk,
     DocumentIndex,
     KnowledgePointDraft,
+    KnowledgePointDraftCitation,
     QuestionDraft,
+    QuestionDraftCitation,
+    SubjectiveGradingCitation,
+    SubjectiveGradingResult,
+    ErrorAnalysisResult,
 )
 
 __all__ = [
@@ -31,5 +36,7 @@ __all__ = [
     "AIRun",
     "AppSetting", "BackgroundJob", "Course", "KnowledgePoint", "PracticeSession", "PracticeSessionQuestion",
     "Question", "QuestionAttempt", "ResourceFile", "ReviewAttempt", "ReviewItem",
-    "StudyGoal", "StudySession", "StudyTask", "TaskRecurrence", "ToolCallLog",
+    "KnowledgePointDraft", "KnowledgePointDraftCitation", "QuestionDraft",
+    "StudyGoal", "StudySession", "StudyTask", "TaskRecurrence", "ToolCallLog", "QuestionDraftCitation",
+    "SubjectiveGradingCitation", "SubjectiveGradingResult", "ErrorAnalysisResult",
 ]

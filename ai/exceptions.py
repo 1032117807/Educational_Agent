@@ -28,3 +28,7 @@ class RetrievalError(AIError):
 
 class InsufficientEvidenceError(AIError):
     """检索证据不足，不能可靠回答。"""
+
+
+class CitationValidationError(AIError):
+    """模型返回了无效、伪造或不一致的引用。"""

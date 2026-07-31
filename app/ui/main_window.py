@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from ai.factory import (
+    create_grounded_qa_service,
+    create_knowledge_extraction_service,
+    create_knowledge_point_index,
+    create_question_generation_service,
+    create_resource_indexing_pipeline,
+    create_subjective_grading_service,
+)
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
@@ -115,7 +123,48 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         content_layout.addWidget(self.stack, 1)
 
-        self.resources_page = ResourcesPage(self.resources, self.jobs)
+        self.resources_page = ResourcesPage(
+            self.resources,
+            self.jobs,
+            indexing_factory=lambda: create_resource_indexing_pipeline(
+                database=self.service.database,
+                app_settings=self.config,
+            ),
+            qa_factory=lambda: create_grounded_qa_service(
+                database=self.service.database,
+                app_settings=self.config,
+            ),
+        )
+        self.resources_page.jobs_changed.connect(self.update_status)
+        practice_page = PracticePage(
+            self.questions,
+            resources=self.resources,
+            jobs=self.jobs,
+            extraction_factory=lambda: create_knowledge_extraction_service(
+                database=self.service.database,
+                app_settings=self.config,
+            ),
+            knowledge_index_factory=lambda: create_knowledge_point_index(
+                database=self.service.database,
+                app_settings=self.config,
+            ),
+            question_generation_factory=lambda: create_question_generation_service(
+                database=self.service.database,
+                app_settings=self.config,
+            ),
+            grading_factory=lambda: create_subjective_grading_service(
+                database=self.service.database,
+                app_settings=self.config,
+            ),
+        )
+        if practice_page.knowledge_extraction_widget is not None:
+            practice_page.knowledge_extraction_widget.jobs_changed.connect(
+                self.update_status
+            )
+        if practice_page.question_generation_widget is not None:
+            practice_page.question_generation_widget.jobs_changed.connect(
+                self.update_status
+            )
         jobs_page = JobsPage(self.jobs)
         jobs_page.retry_requested.connect(self.retry_job)
         pages: list[tuple[str, QWidget]] = [
@@ -123,7 +172,7 @@ class MainWindow(QMainWindow):
             ("我的课程", CoursesPage(self.service)),
             ("学习资料", self.resources_page),
             ("学习计划", PlanPage(self.service)),
-            ("练习中心", PracticePage(self.questions)),
+            ("练习中心", practice_page),
             ("错题与复习", ReviewPage(self.reviews)),
             ("学习分析", AnalyticsPage(self.analytics)),
             ("工具中心", ToolsPage(self.tool_registry)),

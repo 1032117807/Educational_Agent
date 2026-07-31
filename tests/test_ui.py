@@ -12,6 +12,11 @@ def test_main_window_and_navigation(qtbot, tmp_path):
     window = MainWindow(LearningService(database), config)
     qtbot.addWidget(window)
     assert window.stack.count() == 11
+    assert window.resources_page.tabs.count() == 2
+    assert window.resources_page.tabs.tabText(1) == "资料问答"
+    practice_page = window.stack.widget(4)
+    assert practice_page.tabs.count() == 4
+    assert practice_page.tabs.tabText(3) == "AI 出题"
     window.navigate(3)
     assert window.stack.currentIndex() == 3
 

@@ -220,12 +220,15 @@ class KnowledgePointDraft(Base):
     )
 
     name: Mapped[str] = mapped_column(String(160), index=True)
+    category: Mapped[str] = mapped_column(String(30), default="概念")
     definition: Mapped[str] = mapped_column(Text, default="")
     formula: Mapped[str] = mapped_column(Text, default="")
     prerequisites_json: Mapped[str] = mapped_column(Text, default="[]")
     related_points_json: Mapped[str] = mapped_column(Text, default="[]")
     common_mistakes_json: Mapped[str] = mapped_column(Text, default="[]")
     importance: Mapped[int] = mapped_column(Integer, default=3)
+    difficulty: Mapped[int] = mapped_column(Integer, default=3)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
 
     status: Mapped[str] = mapped_column(
         String(20),
@@ -246,6 +249,31 @@ class KnowledgePointDraft(Base):
         DateTime,
         nullable=True,
     )
+
+
+class KnowledgePointDraftCitation(Base):
+    """一条知识点草稿与其原始资料证据之间的关系。"""
+
+    __tablename__ = "knowledge_point_draft_citations"
+    __table_args__ = (
+        UniqueConstraint(
+            "draft_id",
+            "chunk_id",
+            name="uq_knowledge_draft_chunk",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    draft_id: Mapped[int] = mapped_column(
+        ForeignKey("knowledge_point_drafts.id", ondelete="CASCADE"),
+        index=True,
+    )
+    chunk_id: Mapped[int] = mapped_column(
+        ForeignKey("document_chunks.id"),
+        index=True,
+    )
+    quote_text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
 class QuestionDraft(Base):
@@ -295,3 +323,120 @@ class QuestionDraft(Base):
         DateTime,
         nullable=True,
     )
+
+
+
+class QuestionDraftCitation(Base):
+    """题目草稿与原始文档片段之间的引用关系。"""
+
+    __tablename__ = "question_draft_citations"
+    __table_args__ = (
+        UniqueConstraint(
+            "question_draft_id",
+            "chunk_id",
+            name="uq_question_draft_chunk",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    question_draft_id: Mapped[int] = mapped_column(
+        ForeignKey("question_drafts.id", ondelete="CASCADE"),
+        index=True,
+    )
+
+    chunk_id: Mapped[int] = mapped_column(
+        ForeignKey("document_chunks.id"),
+        index=True,
+    )
+
+    citation_number: Mapped[int] = mapped_column(Integer)
+    quote_text: Mapped[str] = mapped_column(Text, default="")
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.now,
+    )
+
+
+class SubjectiveGradingResult(Base):
+    """一次主观题 AI 批改结果；人工复核不会覆盖原始 AI 输出。"""
+
+    __tablename__ = "subjective_grading_results"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ai_run_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_runs.id"), unique=True, index=True
+    )
+    attempt_id: Mapped[int] = mapped_column(
+        ForeignKey("question_attempts.id"), index=True
+    )
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("questions.id"), index=True
+    )
+    total_score: Mapped[float] = mapped_column(Float)
+    max_score: Mapped[float] = mapped_column(Float)
+    rubric_json: Mapped[str] = mapped_column(Text, default="[]")
+    strengths_json: Mapped[str] = mapped_column(Text, default="[]")
+    missing_points_json: Mapped[str] = mapped_column(Text, default="[]")
+    errors_json: Mapped[str] = mapped_column(Text, default="[]")
+    feedback: Mapped[str] = mapped_column(Text, default="")
+    improved_answer: Mapped[str] = mapped_column(Text, default="")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    needs_human_review: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default="completed", index=True
+    )
+    human_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    human_note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class SubjectiveGradingCitation(Base):
+    """主观题批改结果与原始文档片段之间的证据关系。"""
+
+    __tablename__ = "subjective_grading_citations"
+    __table_args__ = (
+        UniqueConstraint(
+            "grading_result_id",
+            "chunk_id",
+            name="uq_grading_result_chunk",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    grading_result_id: Mapped[int] = mapped_column(
+        ForeignKey("subjective_grading_results.id", ondelete="CASCADE"),
+        index=True,
+    )
+    chunk_id: Mapped[int] = mapped_column(
+        ForeignKey("document_chunks.id"), index=True
+    )
+    citation_number: Mapped[int] = mapped_column(Integer)
+    quote_text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class ErrorAnalysisResult(Base):
+    __tablename__ = "error_analysis_results"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ai_run_id: Mapped[int] = mapped_column(ForeignKey("ai_runs.id"), index=True)
+    attempt_id: Mapped[int] = mapped_column(ForeignKey("question_attempts.id"), index=True)
+    question_id: Mapped[int] = mapped_column(ForeignKey("questions.id"), index=True)
+    knowledge_point_id: Mapped[int | None] = mapped_column(
+        ForeignKey("knowledge_points.id"), nullable=True, index=True
+    )
+    error_types_json: Mapped[str] = mapped_column(Text, default="[]")
+    severity: Mapped[str] = mapped_column(String(20), default="medium")
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    missing_knowledge_json: Mapped[str] = mapped_column(Text, default="[]")
+    recommended_exercises_json: Mapped[str] = mapped_column(Text, default="[]")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    needs_human_review: Mapped[bool] = mapped_column(Boolean, default=True)
+    human_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    human_note: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default="needs_review", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

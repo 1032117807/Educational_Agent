@@ -27,10 +27,46 @@ class PaddleOCRService:
         language: str = "ch",
         device: str = "cpu",
         min_confidence: float = 0.5,
+        detection_model_name: str = "PP-OCRv5_mobile_det",
+        detection_model_dir: Path | None = None,
+        recognition_model_name: str = "PP-OCRv5_mobile_rec",
+        recognition_model_dir: Path | None = None,
+        use_doc_orientation: bool = False,
+        use_textline_orientation: bool = False,
+        enable_mkldnn: bool = False,
     ) -> None:
         self.language = language
         self.device = device
         self.min_confidence = min_confidence
+        self.detection_model_name = detection_model_name
+        self.detection_model_dir = self._resolve_model_dir(
+            detection_model_dir,
+            "文本检测",
+        )
+        self.recognition_model_name = recognition_model_name
+        self.recognition_model_dir = self._resolve_model_dir(
+            recognition_model_dir,
+            "文本识别",
+        )
+        self.use_doc_orientation = use_doc_orientation
+        self.use_textline_orientation = use_textline_orientation
+        self.enable_mkldnn = enable_mkldnn
+
+    @staticmethod
+    def _resolve_model_dir(
+        path: Path | None,
+        label: str,
+    ) -> str | None:
+        if path is None:
+            return None
+
+        resolved = path.expanduser().resolve()
+        if not resolved.is_dir():
+            raise DocumentParseError(
+                f"{label} OCR 模型目录不存在：{resolved}"
+            )
+
+        return str(resolved)
 
 
     @cached_property
@@ -45,13 +81,25 @@ class PaddleOCRService:
             ) from exc
 
         try:
-            return PaddleOCR(
-                lang=self.language,
-                device=self.device,
-                use_doc_orientation_classify=True,
-                use_doc_unwarping=False,
-                use_textline_orientation=True,
-            )
+            arguments: dict[str, object] = {
+                "device": self.device,
+                "text_detection_model_name": self.detection_model_name,
+                "text_detection_model_dir": self.detection_model_dir,
+                "text_recognition_model_name": self.recognition_model_name,
+                "text_recognition_model_dir": self.recognition_model_dir,
+                "use_doc_orientation_classify": self.use_doc_orientation,
+                "use_doc_unwarping": False,
+                "use_textline_orientation": self.use_textline_orientation,
+                "enable_mkldnn": self.enable_mkldnn,
+            }
+
+            if (
+                self.detection_model_dir is None
+                and self.recognition_model_dir is None
+            ):
+                arguments["lang"] = self.language
+
+            return PaddleOCR(**arguments)
         except Exception as exc:
             raise DocumentParseError(
                 f"PaddleOCR 模型初始化失败：{exc}"
@@ -85,7 +133,7 @@ class PaddleOCRService:
             recognize_texts = payload.get("rec_texts") or []
             recognized_scores = payload.get("rec_scores") or []
 
-            for index, raw_text in enumerate(recognized_texts):
+            for index, raw_text in enumerate(recognize_texts):
                 text = str(raw_text).strip()
                 if not text:
                     continue

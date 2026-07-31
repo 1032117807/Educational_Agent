@@ -12,6 +12,10 @@ def test_ai_settings_can_be_created_without_api_key() -> None:
     assert settings.chunk_size == 800
     assert settings.chunk_overlap < settings.chunk_size
     assert settings.retrieval_top_k == 8
+    assert settings.embedding_model == "BAAI/bge-small-zh-v1.5"
+    assert settings.embedding_device == "cpu"
+    assert settings.embedding_normalize is True
+    assert settings.embedding_local_files_only is True
 
 
 def test_ai_settings_accept_custom_vector_store_path() -> None:
