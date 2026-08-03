@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -440,3 +441,31 @@ class ErrorAnalysisResult(Base):
     status: Mapped[str] = mapped_column(String(20), default="needs_review", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class LearningPlanDraft(Base):
+    __tablename__ = "learning_plan_drafts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ai_run_id: Mapped[int] = mapped_column(ForeignKey("ai_runs.id"), unique=True, index=True)
+    goal_id: Mapped[int] = mapped_column(ForeignKey("study_goals.id"), index=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    risks_json: Mapped[str] = mapped_column(Text, default="[]")
+    daily_minutes: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class LearningPlanDraftTask(Base):
+    __tablename__ = "learning_plan_draft_tasks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    draft_id: Mapped[int] = mapped_column(ForeignKey("learning_plan_drafts.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(160))
+    planned_date: Mapped[date] = mapped_column(Date)
+    duration_minutes: Mapped[int] = mapped_column(Integer)
+    priority: Mapped[str] = mapped_column(String(20))
+    task_type: Mapped[str] = mapped_column(String(30))
+    course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id"), nullable=True)
+    knowledge_point_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_points.id"), nullable=True)
+    reason: Mapped[str] = mapped_column(Text, default="")

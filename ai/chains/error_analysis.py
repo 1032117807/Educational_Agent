@@ -17,6 +17,7 @@ from app.models import (
     KnowledgePoint,
     Question,
     QuestionAttempt,
+    ReviewItem,
     SubjectiveGradingResult,
 )
 
@@ -221,3 +222,14 @@ class ErrorAnalysisService:
             item.status = "confirmed"
             item.human_note = error_reason.strip()
             item.reviewed_at = datetime.now()
+            review = session.query(ReviewItem).filter_by(
+                question_id=item.question_id
+            ).first()
+            if review is None:
+                review = ReviewItem(
+                    question_id=item.question_id,
+                    title="错误原因分析",
+                    status="reviewing",
+                )
+                session.add(review)
+            review.error_reason = error_reason.strip()[:300]

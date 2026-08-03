@@ -14,6 +14,7 @@ from app.core.config import AppSettings
 from app.database import Database
 from ai.chains import (
     ErrorAnalysisService,
+    PlanGenerationService,
     QuestionGenerationService,
     SubjectiveGradingService,
 )
@@ -133,6 +134,7 @@ def create_knowledge_extraction_service(
         chat_model=create_chat_model(ai_settings),
         provider=ai_settings.provider,
         model_name=ai_settings.chat_model,
+        batch_size=ai_settings.knowledge_extraction_batch_size,
     )
 
 
@@ -225,6 +227,17 @@ def create_error_analysis_service(
 ) -> ErrorAnalysisService:
     ai_settings = get_ai_settings()
     return ErrorAnalysisService(
+        database=database,
+        chat_model=create_chat_model(ai_settings),
+        provider=ai_settings.provider,
+        model_name=ai_settings.chat_model,
+        batch_size=ai_settings.knowledge_extraction_batch_size,
+    )
+
+
+def create_plan_generation_service(*, database: Database, app_settings: AppSettings) -> PlanGenerationService:
+    ai_settings = get_ai_settings()
+    return PlanGenerationService(
         database=database,
         chat_model=create_chat_model(ai_settings),
         provider=ai_settings.provider,

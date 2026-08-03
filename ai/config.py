@@ -30,6 +30,7 @@ class AISettings(BaseSettings):
 
     temperature: float = Field(default=0.1, ge=0.0, le=2.0)
     request_timeout_seconds: float = Field(default=60.0, gt=0)
+    knowledge_extraction_batch_size: int = Field(default=2, ge=1, le=12)
     max_retries: int = Field(default=2, ge=0, le=10)
 
     chunk_size: int = Field(default=800, ge=200, le=4000)

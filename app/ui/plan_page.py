@@ -16,14 +16,19 @@ from PySide6.QtWidgets import (
 )
 
 from app.services.learning import LearningService
+from app.services.domain import JobService
+from ai.chains import PlanGenerationService
+from app.ui.ai_plan_widget import AIPlanWidget
+from collections.abc import Callable
 
 
 from app.ui.components import page_title, stat_card
 
 class PlanPage(QWidget):
-    def __init__(self, service: LearningService) -> None:
+    def __init__(self, service: LearningService, *, jobs: JobService | None = None, plan_factory: Callable[[], PlanGenerationService] | None = None) -> None:
         super().__init__()
         self.service = service
+        self.ai_plan_widget = None
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.addLayout(page_title("学习计划", "安排今日任务并保持可执行的学习节奏"))
@@ -114,6 +119,10 @@ class PlanPage(QWidget):
         goals_layout.addLayout(goal_bar)
         goals_layout.addWidget(self.goals_table)
         tabs.addTab(goals, "学习目标")
+        if jobs is not None and plan_factory is not None:
+            self.ai_plan_widget = AIPlanWidget(learning=service, jobs=jobs, factory=plan_factory)
+            self.ai_plan_widget.tasks_changed.connect(self.refresh)
+            tabs.addTab(self.ai_plan_widget, "AI 学习计划")
         root.addWidget(tabs)
         self.refresh()
 

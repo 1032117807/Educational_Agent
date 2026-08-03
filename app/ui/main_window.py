@@ -9,6 +9,8 @@ from ai.factory import (
     create_question_generation_service,
     create_resource_indexing_pipeline,
     create_subjective_grading_service,
+    create_error_analysis_service,
+    create_plan_generation_service,
 )
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
@@ -156,6 +158,10 @@ class MainWindow(QMainWindow):
                 database=self.service.database,
                 app_settings=self.config,
             ),
+            analysis_factory=lambda: create_error_analysis_service(
+                database=self.service.database,
+                app_settings=self.config,
+            ),
         )
         if practice_page.knowledge_extraction_widget is not None:
             practice_page.knowledge_extraction_widget.jobs_changed.connect(
@@ -171,7 +177,14 @@ class MainWindow(QMainWindow):
             ("首页", DashboardPage(self.service)),
             ("我的课程", CoursesPage(self.service)),
             ("学习资料", self.resources_page),
-            ("学习计划", PlanPage(self.service)),
+            ("学习计划", PlanPage(
+                self.service,
+                jobs=self.jobs,
+                plan_factory=lambda: create_plan_generation_service(
+                    database=self.service.database,
+                    app_settings=self.config,
+                ),
+            )),
             ("练习中心", practice_page),
             ("错题与复习", ReviewPage(self.reviews)),
             ("学习分析", AnalyticsPage(self.analytics)),

@@ -67,11 +67,17 @@ class KnowledgeExtractionWorker(QRunnable):
             self.jobs.update(self.job_id, "cancelled", 100, str(exc))
             self.signals.finished.emit(False, str(exc))
         except Exception as exc:
+            message = str(exc)
+            if "timed out" in message.casefold() or "timeout" in message.casefold():
+                message = (
+                    "模型请求超时。资料索引没有丢失，请重试；如果仍然失败，"
+                    "请检查 API 服务状态或提高请求超时时间。"
+                )
             self.jobs.update(
                 self.job_id, "failed", 100,
-                detail="知识点抽取失败", error=str(exc),
+                detail="知识点抽取失败", error=message,
             )
-            self.signals.finished.emit(False, str(exc))
+            self.signals.finished.emit(False, message)
 
 
 class KnowledgeIndexWorker(QRunnable):

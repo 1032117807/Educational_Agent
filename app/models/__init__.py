@@ -29,6 +29,8 @@ from app.models.ai_entities import (
     SubjectiveGradingCitation,
     SubjectiveGradingResult,
     ErrorAnalysisResult,
+    LearningPlanDraft,
+    LearningPlanDraftTask,
 )
 
 __all__ = [
@@ -39,4 +41,5 @@ __all__ = [
     "KnowledgePointDraft", "KnowledgePointDraftCitation", "QuestionDraft",
     "StudyGoal", "StudySession", "StudyTask", "TaskRecurrence", "ToolCallLog", "QuestionDraftCitation",
     "SubjectiveGradingCitation", "SubjectiveGradingResult", "ErrorAnalysisResult",
+    "LearningPlanDraft", "LearningPlanDraftTask",
 ]

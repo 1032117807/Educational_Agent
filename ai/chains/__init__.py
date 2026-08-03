@@ -30,6 +30,7 @@ from ai.chains.subjective_grading import (
     SubjectiveGradingService,
 )
 from ai.chains.error_analysis import ErrorAnalysis, ErrorAnalysisOutput, ErrorAnalysisService
+from ai.chains.plan_generation import GeneratedPlanTask, PlanGenerationOutput, PlanGenerationService
 
 __all__ = [
     "AnswerCitation",
@@ -55,4 +56,5 @@ __all__ = [
     "SubjectiveGradeOutput",
     "SubjectiveGradingService",
     "ErrorAnalysis", "ErrorAnalysisOutput", "ErrorAnalysisService",
+    "GeneratedPlanTask", "PlanGenerationOutput", "PlanGenerationService",
 ]

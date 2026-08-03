@@ -30,6 +30,7 @@ from ai.chains import (
     QuestionDraftService,
     QuestionGenerationService,
     SubjectiveGradingService,
+    ErrorAnalysisService,
 )
 from ai.retrieval import KnowledgePointIndex
 from app.ui.knowledge_extraction_widget import KnowledgeExtractionWidget
@@ -164,18 +165,92 @@ class SubjectiveGradingDialog(QDialog):
         root.addWidget(close)
 
 
+class ErrorAnalysisSignals(QObject):
+    succeeded = Signal(object)
+    failed = Signal(str)
+    finished = Signal()
+
+
+class ErrorAnalysisWorker(QRunnable):
+    def __init__(self, *, analysis_factory, jobs: JobService, job_id: int, attempt_id: int) -> None:
+        super().__init__()
+        self.analysis_factory = analysis_factory
+        self.jobs = jobs
+        self.job_id = job_id
+        self.attempt_id = attempt_id
+        self.signals = ErrorAnalysisSignals()
+        self.setAutoDelete(False)
+
+    def run(self) -> None:
+        try:
+            if self.jobs.is_cancelled(self.job_id):
+                self.signals.failed.emit("错误分析任务已取消")
+                return
+            self.jobs.update(self.job_id, "running", 20, "正在分析答题错误原因")
+            result = self.analysis_factory().analyze_attempt(self.attempt_id)
+            self.jobs.update(self.job_id, "completed", 100, "错误原因分析完成")
+            self.signals.succeeded.emit(result)
+        except Exception as exc:
+            self.jobs.update(self.job_id, "failed", 100, "错误原因分析失败", str(exc))
+            self.signals.failed.emit(str(exc))
+        finally:
+            self.signals.finished.emit()
+
+
+class ErrorAnalysisDialog(QDialog):
+    def __init__(self, result: object, *, confirm_callback, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.result = result
+        self.confirm_callback = confirm_callback
+        self.setWindowTitle("AI 错误原因分析")
+        self.resize(720, 560)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(f"错误类型：{', '.join(result.error_types)}"))
+        layout.addWidget(QLabel(f"严重程度：{result.severity}"))
+        layout.addWidget(QLabel(f"置信度：{result.confidence:.0%}"))
+        if result.needs_human_review:
+            warning = QLabel("该结果需要人工复核，AI 不能自动写入错题记录。")
+            warning.setStyleSheet("color: #c0392b; font-weight: 600;")
+            layout.addWidget(warning)
+        layout.addWidget(QLabel("错误原因"))
+        self.reason = QPlainTextEdit()
+        self.reason.setPlainText(result.explanation)
+        layout.addWidget(self.reason)
+        confirm = QPushButton("确认并写入错题")
+        confirm.clicked.connect(self.confirm)
+        layout.addWidget(confirm)
+        close = QPushButton("关闭")
+        close.clicked.connect(self.reject)
+        layout.addWidget(close)
+
+    def confirm(self) -> None:
+        reason = self.reason.toPlainText().strip()
+        if not reason:
+            QMessageBox.warning(self, "内容为空", "请输入错误原因。")
+            return
+        try:
+            self.confirm_callback(reason)
+            QMessageBox.information(self, "保存成功", "错误原因已写入错题记录。")
+            self.accept()
+        except Exception as exc:
+            QMessageBox.warning(self, "保存失败", str(exc))
+
+
 class PracticeDialog(QDialog):
     def __init__(
         self, service: QuestionService, parent: QWidget | None = None,
         resumed: tuple[object, list[object]] | None = None, immediate_feedback: bool = True,
         *, jobs: JobService | None = None,
-        grading_factory: Callable[[], SubjectiveGradingService] | None = None
+        grading_factory: Callable[[], SubjectiveGradingService] | None = None,
+        analysis_factory: Callable[[], ErrorAnalysisService] | None = None,
     ) -> None:
         super().__init__(parent)
         self.service = service
         self.immediate_feedback = immediate_feedback
         self.jobs = jobs
         self.grading_factory = grading_factory
+        self.analysis_factory = analysis_factory
+        self.error_worker = None
         self.grading_worker = None
         self.setWindowTitle("快速练习")
         self.resize(700, 520)
@@ -206,7 +281,10 @@ class PracticeDialog(QDialog):
         self.ai_grade_button = QPushButton("AI 批改")
         self.ai_grade_button.clicked.connect(self.ai_grade)
         self.ai_grade_button.setEnabled(jobs is not None and grading_factory is not None)
-        for button in (previous, submit, next_button, mark, self.ai_grade_button, finish):
+        self.error_button = QPushButton("分析错误原因")
+        self.error_button.clicked.connect(self.analyze_error)
+        self.error_button.setEnabled(jobs is not None and analysis_factory is not None)
+        for button in (previous, submit, next_button, mark, self.ai_grade_button, self.error_button, finish):
             buttons.addWidget(button)
         root.addWidget(self.progress)
         root.addWidget(self.prompt)
@@ -269,6 +347,41 @@ class PracticeDialog(QDialog):
         self.feedback.setText(f"AI 批改失败：{message}")
         QMessageBox.warning(self, "AI 批改失败", message)
 
+    def analyze_error(self) -> None:
+        if self.jobs is None or self.analysis_factory is None:
+            QMessageBox.warning(self, "AI 不可用", "当前未配置错误分析服务。")
+            return
+        question = self.questions[self.index]
+        attempt_id = self.service.get_attempt_id(self.practice.id, question.id)
+        if attempt_id is None:
+            QMessageBox.warning(self, "无法分析", "请先提交当前题目。")
+            return
+        job = self.jobs.create("error_analysis", f"分析题目错误：{question.prompt[:80]}")
+        self.error_button.setEnabled(False)
+        worker = ErrorAnalysisWorker(
+            analysis_factory=self.analysis_factory,
+            jobs=self.jobs,
+            job_id=job.id,
+            attempt_id=attempt_id,
+        )
+        worker.signals.succeeded.connect(self.show_error_analysis)
+        worker.signals.failed.connect(
+            lambda message: QMessageBox.warning(self, "错误分析失败", message)
+        )
+        worker.signals.finished.connect(lambda: self.error_button.setEnabled(True))
+        self.error_worker = worker
+        QThreadPool.globalInstance().start(worker)
+
+    def show_error_analysis(self, result: object) -> None:
+        ErrorAnalysisDialog(
+            result,
+            confirm_callback=lambda reason: self.analysis_factory().confirm(
+                result.id,
+                error_reason=reason,
+            ),
+            parent=self,
+        ).exec()
+
     def previous(self) -> None:
         self.save_current_draft()
         if self.index > 0:
@@ -316,11 +429,13 @@ class PracticePage(QWidget):
             [], QuestionGenerationService
         ] | None = None,
         grading_factory: Callable[[], SubjectiveGradingService] | None = None,
+        analysis_factory: Callable[[], ErrorAnalysisService] | None = None,
     ) -> None:
         super().__init__()
         self.service = service
         self.jobs = jobs
         self.grading_factory = grading_factory
+        self.analysis_factory = analysis_factory
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.addLayout(page_title("练习中心", "管理本地题库并开始可恢复、可判分的练习"))
@@ -542,7 +657,8 @@ class PracticePage(QWidget):
             )
             PracticeDialog(
                 self.service, self, prepared, feedback.currentText() == "即时显示答案"
-                , jobs=self.jobs, grading_factory=self.grading_factory
+                , jobs=self.jobs, grading_factory=self.grading_factory,
+                analysis_factory=self.analysis_factory
             ).exec()
             self.refresh()
         except ValueError as error:
@@ -556,6 +672,7 @@ class PracticePage(QWidget):
         PracticeDialog(
             self.service, self, resumed,
             jobs=self.jobs, grading_factory=self.grading_factory
+            , analysis_factory=self.analysis_factory
         ).exec()
         self.refresh()
 
@@ -608,5 +725,7 @@ class ResultDialog(QDialog):
         close = QDialogButtonBox(QDialogButtonBox.Close)
         close.rejected.connect(self.reject)
         root.addWidget(close)
+
+
 
 
