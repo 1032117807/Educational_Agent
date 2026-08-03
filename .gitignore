@@ -15,4 +15,27 @@ build/
 data/
 !data/.gitkeep
 models/
-*.env
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Local databases, logs, indexes, uploaded files, and model caches
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
+workspace/
+vector_store/
+chroma/
+models/
+data/*
+!data/.gitkeep
+
+# Local runtime and temporary files
+*.tmp
+*.bak
+*.lock
+*.pid
+.personal_learning_desktop/
