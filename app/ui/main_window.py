@@ -7,6 +7,7 @@ from ai.factory import (
     create_knowledge_extraction_service,
     create_knowledge_point_index,
     create_learning_report_service,
+    create_learning_plan_agent_service,
     create_question_generation_service,
     create_resource_indexing_pipeline,
     create_subjective_grading_service,
@@ -32,6 +33,7 @@ from app.ui.pages import CoursesPage, DashboardPage, PlanPage, SettingsPage
 from app.ui.icons import IconProvider
 from app.tools.registry import ToolRegistry
 from app.ui.styles.theme import DARK, LIGHT
+from app.ui.learning_agent_page import LearningAgentPage
 
 
 class MainWindow(QMainWindow):
@@ -187,6 +189,13 @@ class MainWindow(QMainWindow):
             ),
         )
         analytics_page.jobs_changed.connect(self.update_status)
+        agent_page = LearningAgentPage(
+            jobs=self.jobs,
+            agent_factory=lambda: create_learning_plan_agent_service(
+                database=self.service.database,
+                app_settings=self.config,
+            ),
+        )
         self.resources_page.knowledge_drafts_ready.connect(
             lambda course_id: self._open_knowledge_drafts(practice_page, course_id)
         )
@@ -208,6 +217,7 @@ class MainWindow(QMainWindow):
             ("练习中心", practice_page),
             ("错题与复习", ReviewPage(self.reviews)),
             ("学习分析", analytics_page),
+            ("学习 Agent", agent_page),
             ("工具中心", ToolsPage(self.tool_registry)),
             ("后台任务", jobs_page),
             ("日志查看器", LogsPage(self.config.log_dir / "app.log")),
@@ -292,10 +302,10 @@ class MainWindow(QMainWindow):
         elif command == "toggle_theme":
             self.toggle_theme()
         elif command == "backup":
-            self.navigate(10)
+            self.navigate(11)
             getattr(self.stack.currentWidget(), "backup")()
         elif command == "open_logs":
-            self.navigate(9)
+            self.navigate(10)
 
     def navigate(self, index: int) -> None:
         self.stack.setCurrentIndex(index)

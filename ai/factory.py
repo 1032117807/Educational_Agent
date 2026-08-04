@@ -32,6 +32,7 @@ from ai.retrieval import (
 
 from ai.chains import GroundedQAService, KnowledgeExtractionService
 from ai.gateways import create_chat_model
+from ai.agents import LearningPlanAgentService
 
 def create_resource_indexing_pipeline(
     *,
@@ -251,5 +252,16 @@ def create_plan_generation_service(*, database: Database, app_settings: AppSetti
         chat_model=create_chat_model(ai_settings),
         provider=ai_settings.provider,
         model_name=ai_settings.chat_model,
+    )
+
+
+def create_learning_plan_agent_service(*, database: Database, app_settings: AppSettings) -> LearningPlanAgentService:
+    ai_settings = get_ai_settings()
+    return LearningPlanAgentService(
+        database=database,
+        chat_model=create_chat_model(ai_settings),
+        plan_factory=lambda: create_plan_generation_service(
+            database=database, app_settings=app_settings
+        ),
     )
   
