@@ -10,7 +10,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.database import Database
-from app.models import QuestionAttempt, StudySession, StudyTask, KnowledgePoint
+from app.models import (
+    KnowledgePoint,
+    LearningReportSnapshot,
+    QuestionAttempt,
+    StudySession,
+    StudyTask,
+)
 
 
 @dataclass(frozen=True)
@@ -40,6 +46,48 @@ class ReportExplanation(BaseModel):
 class LearningReport:
     stats: LearningStats
     explanation: ReportExplanation
+
+
+@dataclass(frozen=True)
+class SavedLearningReport:
+    id: int
+    start_date: date
+    end_date: date
+    markdown: str
+    created_at: datetime
+
+
+def render_learning_report(report: LearningReport) -> str:
+    stats = report.stats
+    explanation = report.explanation
+
+    def format_list(items: list[str]) -> str:
+        return "\n".join(f"- {item}" for item in items) if items else "- 暂无"
+
+    return "\n".join([
+        "# AI 学习报告",
+        f"周期：{stats.start_date} 至 {stats.end_date}",
+        "",
+        "## 真实统计",
+        f"- 学习时长：{stats.study_minutes} 分钟",
+        f"- 任务完成：{stats.task_completed}/{stats.task_total}（{stats.task_completion_rate:.0%}）",
+        f"- 练习正确：{stats.correct_total}/{stats.attempt_total}（{stats.accuracy:.0%}）",
+        "",
+        "## 总结",
+        explanation.summary,
+        "",
+        "## 优势",
+        format_list(explanation.strengths),
+        "",
+        "## 薄弱点",
+        format_list(explanation.weaknesses),
+        "",
+        "## 建议",
+        format_list(explanation.recommendations),
+        "",
+        "## 下周重点",
+        format_list(explanation.next_week_priorities),
+    ])
 
 
 PROMPT = ChatPromptTemplate.from_messages([
@@ -102,3 +150,39 @@ class LearningReportService:
             "stats": json.dumps(asdict(stats), ensure_ascii=False, default=str),
         }))
         return LearningReport(stats=stats, explanation=explanation)
+
+    def save_snapshot(self, report: LearningReport, markdown: str) -> SavedLearningReport:
+        with self.database.session() as session:
+            snapshot = LearningReportSnapshot(
+                start_date=report.stats.start_date,
+                end_date=report.stats.end_date,
+                stats_json=json.dumps(asdict(report.stats), ensure_ascii=False, default=str),
+                report_markdown=markdown,
+            )
+            session.add(snapshot)
+            session.flush()
+            return SavedLearningReport(
+                id=snapshot.id,
+                start_date=snapshot.start_date,
+                end_date=snapshot.end_date,
+                markdown=snapshot.report_markdown,
+                created_at=snapshot.created_at,
+            )
+
+    def list_snapshots(self, *, limit: int = 50) -> list[SavedLearningReport]:
+        with self.database.session() as session:
+            snapshots = list(session.scalars(
+                select(LearningReportSnapshot)
+                .order_by(LearningReportSnapshot.created_at.desc())
+                .limit(limit)
+            ))
+        return [
+            SavedLearningReport(
+                id=item.id,
+                start_date=item.start_date,
+                end_date=item.end_date,
+                markdown=item.report_markdown,
+                created_at=item.created_at,
+            )
+            for item in snapshots
+        ]

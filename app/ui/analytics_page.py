@@ -24,7 +24,7 @@ from app.services.domain import (
 from app.tools.registry import ToolRegistry
 from app.ui.pages import page_title, stat_card
 from app.ui.icons import IconProvider
-from ai.reports import LearningReport, LearningReportService
+from ai.reports import LearningReport, LearningReportService, render_learning_report
 
 
 def _selected_id(table: QTableWidget) -> int | None:
@@ -94,6 +94,7 @@ class AnalyticsPage(QWidget):
         self.jobs = jobs
         self.report_factory = report_factory
         self.report_worker: LearningReportWorker | None = None
+        self.current_report_markdown = ""
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.addLayout(page_title("学习分析", "统计仅来自本地真实任务、练习和学习记录"))
@@ -154,18 +155,33 @@ class AnalyticsPage(QWidget):
         self.report_end.setDate(QDate(end.year, end.month, end.day))
         self.report_button = QPushButton("生成 AI 报告")
         self.report_button.clicked.connect(self.generate_report)
+        self.report_export_button = QPushButton("导出 Markdown")
+        self.report_export_button.setEnabled(False)
+        self.report_export_button.clicked.connect(self.export_report_markdown)
         controls.addWidget(QLabel("开始"))
         controls.addWidget(self.report_start)
         controls.addWidget(QLabel("结束"))
         controls.addWidget(self.report_end)
         controls.addWidget(self.report_button)
+        controls.addWidget(self.report_export_button)
         controls.addStretch()
         self.report_status = QLabel("就绪")
         controls.addWidget(self.report_status)
         root.addLayout(controls)
+        self.report_history = QTableWidget(0, 2)
+        self.report_history.setHorizontalHeaderLabels(["报告周期", "生成时间"])
+        self.report_history.horizontalHeader().setStretchLastSection(True)
+        self.report_history.setSelectionBehavior(QTableWidget.SelectRows)
+        self.report_history.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.report_history.itemSelectionChanged.connect(self.open_selected_report)
         self.report_text = QTextEdit()
         self.report_text.setReadOnly(True)
-        root.addWidget(self.report_text, 1)
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self.report_history)
+        splitter.addWidget(self.report_text)
+        splitter.setSizes([280, 720])
+        root.addWidget(splitter, 1)
+        self.refresh_report_history()
         return page
 
     def _dates(self) -> tuple[date, date]:
@@ -275,42 +291,55 @@ class AnalyticsPage(QWidget):
         QThreadPool.globalInstance().start(worker)
 
     def show_report(self, report: LearningReport) -> None:
-        stats = report.stats
-        explanation = report.explanation
-        sections = [
-            "# AI 学习报告",
-            f"周期：{stats.start_date} 至 {stats.end_date}",
-            "",
-            "## 真实统计",
-            f"- 学习时长：{stats.study_minutes} 分钟",
-            f"- 任务完成：{stats.task_completed}/{stats.task_total}（{stats.task_completion_rate:.0%}）",
-            f"- 练习正确：{stats.correct_total}/{stats.attempt_total}（{stats.accuracy:.0%}）",
-            "",
-            "## 总结",
-            explanation.summary,
-            "",
-            "## 优势",
-            self._format_report_list(explanation.strengths),
-            "",
-            "## 薄弱点",
-            self._format_report_list(explanation.weaknesses),
-            "",
-            "## 建议",
-            self._format_report_list(explanation.recommendations),
-            "",
-            "## 下周重点",
-            self._format_report_list(explanation.next_week_priorities),
-        ]
-        self.report_text.setMarkdown("\n".join(sections))
+        self.current_report_markdown = render_learning_report(report)
+        self.report_text.setMarkdown(self.current_report_markdown)
+        self.report_export_button.setEnabled(True)
+        if self.report_factory is not None:
+            try:
+                self.report_factory().save_snapshot(report, self.current_report_markdown)
+                self.refresh_report_history()
+            except Exception as exc:
+                QMessageBox.warning(self, "保存 AI 报告失败", str(exc))
         self.report_status.setText("完成")
 
     def show_report_error(self, message: str) -> None:
         self.report_status.setText("失败")
         QMessageBox.warning(self, "AI 报告失败", message)
 
-    @staticmethod
-    def _format_report_list(items: list[str]) -> str:
-        return "\n".join(f"- {item}" for item in items) if items else "- 暂无"
+    def refresh_report_history(self) -> None:
+        if self.report_factory is None:
+            return
+        reports = self.report_factory().list_snapshots()
+        self.report_history.setRowCount(len(reports))
+        for row, report in enumerate(reports):
+            period = QTableWidgetItem(f"{report.start_date} 至 {report.end_date}")
+            period.setData(Qt.UserRole, report.markdown)
+            created = QTableWidgetItem(report.created_at.strftime("%Y-%m-%d %H:%M"))
+            self.report_history.setItem(row, 0, period)
+            self.report_history.setItem(row, 1, created)
+
+    def open_selected_report(self) -> None:
+        row = self.report_history.currentRow()
+        item = self.report_history.item(row, 0) if row >= 0 else None
+        if item is None:
+            return
+        self.current_report_markdown = item.data(Qt.UserRole)
+        self.report_text.setMarkdown(self.current_report_markdown)
+        self.report_export_button.setEnabled(True)
+        self.report_status.setText("已打开历史报告")
+
+    def export_report_markdown(self) -> None:
+        if not self.current_report_markdown:
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "导出 AI 学习报告", "learning-report.md", "Markdown (*.md)"
+        )
+        if not filename:
+            return
+        try:
+            Path(filename).write_text(self.current_report_markdown, encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.warning(self, "导出失败", str(exc))
 
     @staticmethod
     def _bar_chart(title: str, categories: list[str], values: list[int], series_name: str) -> QChart:

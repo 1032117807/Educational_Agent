@@ -3,9 +3,11 @@ from ai.reports.learning_report import (
     LearningReportService,
     LearningStats,
     ReportExplanation,
+    SavedLearningReport,
+    render_learning_report,
 )
 
 __all__ = [
-    "LearningReport", "LearningReportService", "LearningStats",
-    "ReportExplanation",
+    "LearningReport", "LearningReportService", "LearningStats", "ReportExplanation",
+    "SavedLearningReport", "render_learning_report",
 ]

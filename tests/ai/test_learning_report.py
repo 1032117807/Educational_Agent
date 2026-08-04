@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta
 
-from ai.reports import LearningReportService
+from ai.reports import LearningReport, LearningReportService, ReportExplanation, render_learning_report
 from app.database import Database
 from app.models import Course, KnowledgePoint, QuestionAttempt, StudySession, StudyTask
 
@@ -40,4 +40,22 @@ def test_stats_are_calculated_from_database(tmp_path):
     assert stats.study_minutes == 45
     assert stats.task_completion_rate == 1
     assert stats.accuracy == 0.5
+    db.close()
+
+
+def test_report_snapshot_is_saved_and_listed(tmp_path):
+    db = Database(f"sqlite:///{(tmp_path / 'report.db').as_posix()}")
+    db.create_schema()
+    service = LearningReportService.__new__(LearningReportService)
+    service.database = db
+    report = LearningReport(
+        stats=service.calculate_stats(start_date=date(2026, 1, 1), end_date=date(2026, 1, 7)),
+        explanation=ReportExplanation(summary="测试总结"),
+    )
+    markdown = render_learning_report(report)
+    saved = service.save_snapshot(report, markdown)
+    reports = service.list_snapshots()
+    assert saved.id == reports[0].id
+    assert reports[0].markdown == markdown
+    assert "测试总结" in reports[0].markdown
     db.close()

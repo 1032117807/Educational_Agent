@@ -469,3 +469,16 @@ class LearningPlanDraftTask(Base):
     course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id"), nullable=True)
     knowledge_point_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_points.id"), nullable=True)
     reason: Mapped[str] = mapped_column(Text, default="")
+
+
+class LearningReportSnapshot(Base):
+    """A generated learning report preserved with the data it was based on."""
+
+    __tablename__ = "learning_report_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    start_date: Mapped[date] = mapped_column(Date, index=True)
+    end_date: Mapped[date] = mapped_column(Date, index=True)
+    stats_json: Mapped[str] = mapped_column(Text, default="{}")
+    report_markdown: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
