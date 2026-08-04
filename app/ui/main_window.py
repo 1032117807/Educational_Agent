@@ -187,6 +187,12 @@ class MainWindow(QMainWindow):
             ),
         )
         analytics_page.jobs_changed.connect(self.update_status)
+        self.resources_page.knowledge_drafts_ready.connect(
+            lambda course_id: self._open_knowledge_drafts(practice_page, course_id)
+        )
+        practice_page.report_requested.connect(
+            lambda: self._open_today_report(analytics_page)
+        )
         pages: list[tuple[str, QWidget]] = [
             ("首页", DashboardPage(self.service)),
             ("我的课程", CoursesPage(self.service)),
@@ -299,6 +305,14 @@ class MainWindow(QMainWindow):
         refresh = getattr(page, "refresh", None)
         if callable(refresh):
             refresh()
+
+    def _open_knowledge_drafts(self, practice_page: PracticePage, course_id: int) -> None:
+        self.navigate(4)
+        practice_page.show_pending_knowledge_drafts(course_id)
+
+    def _open_today_report(self, analytics_page: AnalyticsPage) -> None:
+        self.navigate(6)
+        analytics_page.open_today_report()
 
     def toggle_theme(self) -> None:
         current = str(self.preferences.value("theme", "light"))

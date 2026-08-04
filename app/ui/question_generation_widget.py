@@ -94,6 +94,7 @@ class QuestionGenerationWorker(QRunnable):
 class QuestionGenerationWidget(QWidget):
     jobs_changed = Signal()
     questions_changed = Signal()
+    practice_requested = Signal(int)
 
     def __init__(
         self,
@@ -186,11 +187,14 @@ class QuestionGenerationWidget(QWidget):
         )
         actions = QHBoxLayout()
         accept = QPushButton("接受并写入题库")
-        accept.setProperty("primary", True)
         accept.clicked.connect(self.accept_selected)
+        accept_and_practice = QPushButton("接受并开始练习")
+        accept_and_practice.setProperty("primary", True)
+        accept_and_practice.clicked.connect(self.accept_and_practice_selected)
         reject = QPushButton("拒绝")
         reject.clicked.connect(self.reject_selected)
         actions.addWidget(accept)
+        actions.addWidget(accept_and_practice)
         actions.addWidget(reject)
         actions.addStretch()
         detail_layout.addWidget(self.detail, 1)
@@ -315,6 +319,14 @@ class QuestionGenerationWidget(QWidget):
                 self.table.setItem(row, column, value)
         self.detail.clear()
 
+    def prefill_for_knowledge(self, course_id: int, knowledge_name: str) -> None:
+        index = self.course.findData(course_id)
+        if index >= 0:
+            self.course.setCurrentIndex(index)
+        self.request.setPlainText(f"围绕“{knowledge_name}”生成练习题，覆盖定义、理解和常见错误。")
+        self.status_filter.setCurrentIndex(max(0, self.status_filter.findData("pending")))
+        self.refresh()
+
     def _selected_draft(self):
         row = self.table.currentRow()
         item = self.table.item(row, 0) if row >= 0 else None
@@ -360,7 +372,7 @@ class QuestionGenerationWidget(QWidget):
             ])
         self.detail.setPlainText("\n".join(lines))
 
-    def accept_selected(self) -> None:
+    def accept_selected(self, start_practice: bool = False) -> None:
         draft = self._selected_draft()
         if draft is None:
             QMessageBox.information(self, "题目审核", "请先选择题目草稿。")
@@ -374,11 +386,16 @@ class QuestionGenerationWidget(QWidget):
             question_id = self.drafts.accept(draft.id, review_note=note)
             self.refresh()
             self.questions_changed.emit()
+            if start_practice:
+                self.practice_requested.emit(question_id)
             QMessageBox.information(
                 self, "题目审核", f"题目已写入正式题库，ID：{question_id}"
             )
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             QMessageBox.warning(self, "无法接受", str(exc))
+
+    def accept_and_practice_selected(self) -> None:
+        self.accept_selected(start_practice=True)
 
     def reject_selected(self) -> None:
         draft = self._selected_draft()

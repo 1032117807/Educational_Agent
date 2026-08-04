@@ -113,6 +113,7 @@ class KnowledgeIndexWorker(QRunnable):
 class KnowledgeExtractionWidget(QWidget):
     jobs_changed = Signal()
     knowledge_changed = Signal()
+    knowledge_accepted = Signal(int, int, str)
 
     def __init__(
         self,
@@ -232,6 +233,15 @@ class KnowledgeExtractionWidget(QWidget):
                 self.table.setItem(row, column, value)
         self.detail.clear()
 
+    def show_pending_for_course(self, course_id: int) -> None:
+        index = self.course.findData(course_id)
+        if index >= 0:
+            self.course.setCurrentIndex(index)
+        pending_index = self.status_filter.findData("pending")
+        if pending_index >= 0:
+            self.status_filter.setCurrentIndex(pending_index)
+        self.refresh()
+
     def start_extraction(self) -> None:
         course_id = self.course.currentData()
         if course_id is None:
@@ -325,9 +335,10 @@ class KnowledgeExtractionWidget(QWidget):
             QMessageBox.information(self, "知识点审核", "请先选择草稿。")
             return
         try:
-            self.drafts.accept(draft.id)
+            point_id = self.drafts.accept(draft.id)
             self.refresh()
             self.knowledge_changed.emit()
+            self.knowledge_accepted.emit(draft.course_id, point_id, draft.name)
         except ValueError as exc:
             QMessageBox.warning(self, "无法接受", str(exc))
 

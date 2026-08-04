@@ -155,6 +155,35 @@ class QuestionService:
                 ))
             return practice, chosen
 
+    def create_practice_for_questions(
+        self, question_ids: list[int]
+    ) -> tuple[PracticeSession, list[Question]]:
+        ordered_ids = list(dict.fromkeys(question_ids))
+        if not ordered_ids:
+            raise ValueError("至少选择一道题目")
+        with self.database.session() as session:
+            rows = list(session.scalars(select(Question).where(
+                Question.id.in_(ordered_ids), ~Question.archived
+            )))
+            questions_by_id = {question.id: question for question in rows}
+            if len(questions_by_id) != len(ordered_ids):
+                raise ValueError("存在未入库或已归档的题目")
+            questions = [questions_by_id[question_id] for question_id in ordered_ids]
+            course_ids = {question.course_id for question in questions}
+            practice = PracticeSession(
+                course_id=course_ids.pop() if len(course_ids) == 1 else None,
+                total=len(questions),
+            )
+            session.add(practice)
+            session.flush()
+            for position, question in enumerate(questions):
+                session.add(PracticeSessionQuestion(
+                    session_id=practice.id,
+                    question_id=question.id,
+                    position=position,
+                ))
+            return practice, questions
+
     def resume_latest(self) -> tuple[PracticeSession, list[Question]] | None:
         with self.database.session() as session:
             practice = session.scalar(select(PracticeSession).where(

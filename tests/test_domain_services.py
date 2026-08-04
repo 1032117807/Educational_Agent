@@ -161,6 +161,16 @@ def test_attempt_updates_knowledge_mastery(domain):
     assert service.list_knowledge(course.id)[0].mastery == 60
 
 
+def test_create_practice_for_specific_accepted_questions(domain):
+    database, _ = domain
+    service = QuestionService(database)
+    first = service.save_question("第一题", "A")
+    second = service.save_question("第二题", "B")
+    practice, questions = service.create_practice_for_questions([second.id, first.id])
+    assert practice.total == 2
+    assert [question.id for question in questions] == [second.id, first.id]
+
+
 def test_analytics_empty_and_backup_manifest(domain, tmp_path):
     database, config = domain
     summary = AnalyticsService(database).summary(date.today(), date.today())

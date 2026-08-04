@@ -135,6 +135,7 @@ class LazyKnowledgeWorker(QRunnable):
 
 class ResourceQAWidget(QWidget):
     jobs_changed = Signal()
+    knowledge_drafts_ready = Signal(int)
 
     def __init__(
         self,
@@ -362,7 +363,9 @@ class ResourceQAWidget(QWidget):
             chunk_ids=chunk_ids,
         )
         worker.signals.succeeded.connect(
-            lambda message: QMessageBox.information(self, "知识总结完成", message)
+            lambda message, selected_course=course_id: self._knowledge_summary_succeeded(
+                selected_course, message
+            )
         )
         worker.signals.failed.connect(
             lambda message: QMessageBox.warning(self, "知识总结失败", message)
@@ -371,6 +374,10 @@ class ResourceQAWidget(QWidget):
         worker.signals.finished.connect(self.jobs_changed.emit)
         self._memory_worker = worker
         self.pool.start(worker)
+
+    def _knowledge_summary_succeeded(self, course_id: int, message: str) -> None:
+        QMessageBox.information(self, "知识总结完成", message)
+        self.knowledge_drafts_ready.emit(course_id)
 
     def _show_excerpt(
         self,

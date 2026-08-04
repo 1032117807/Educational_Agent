@@ -237,6 +237,7 @@ class ErrorAnalysisDialog(QDialog):
 
 
 class PracticeDialog(QDialog):
+    completed = Signal()
     def __init__(
         self, service: QuestionService, parent: QWidget | None = None,
         resumed: tuple[object, list[object]] | None = None, immediate_feedback: bool = True,
@@ -398,6 +399,7 @@ class PracticeDialog(QDialog):
         self.save_current_draft()
         result = self.service.finish(self.practice.id, 0)
         ResultDialog(self.service, result, self).exec()
+        self.completed.emit()
         self.accept()
 
     def save_current_draft(self) -> None:
@@ -417,6 +419,7 @@ class PracticeDialog(QDialog):
 
 
 class PracticePage(QWidget):
+    report_requested = Signal()
     def __init__(
         self,
         service: QuestionService,
@@ -503,6 +506,9 @@ class PracticePage(QWidget):
                 index_factory=knowledge_index_factory,
             )
             self.knowledge_extraction_widget.knowledge_changed.connect(self.refresh)
+            self.knowledge_extraction_widget.knowledge_accepted.connect(
+                self.open_question_generator_for_knowledge
+            )
             knowledge_layout.addWidget(self.knowledge_extraction_widget, 1)
         tabs = QTabWidget()
         tabs.addTab(self.table, "题库管理")
@@ -517,6 +523,9 @@ class PracticePage(QWidget):
                 generation_factory=question_generation_factory,
             )
             self.question_generation_widget.questions_changed.connect(self.refresh)
+            self.question_generation_widget.practice_requested.connect(
+                self.start_practice_for_question
+            )
             tabs.addTab(self.question_generation_widget, "AI 出题")
         self.tabs = tabs
         root.addWidget(tabs)
@@ -554,6 +563,38 @@ class PracticePage(QWidget):
             self.knowledge_extraction_widget.refresh_scopes()
         if self.question_generation_widget is not None:
             self.question_generation_widget.refresh_scopes()
+
+    def show_pending_knowledge_drafts(self, course_id: int) -> None:
+        if self.knowledge_extraction_widget is None:
+            return
+        self.tabs.setCurrentIndex(2)
+        self.knowledge_extraction_widget.show_pending_for_course(course_id)
+
+    def open_question_generator_for_knowledge(
+        self, course_id: int, _point_id: int, knowledge_name: str
+    ) -> None:
+        if self.question_generation_widget is None:
+            return
+        self.tabs.setCurrentWidget(self.question_generation_widget)
+        self.question_generation_widget.prefill_for_knowledge(course_id, knowledge_name)
+
+    def start_practice_for_question(self, question_id: int) -> None:
+        try:
+            prepared = self.service.create_practice_for_questions([question_id])
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法开始练习", str(exc))
+            return
+        dialog = PracticeDialog(
+            self.service,
+            self,
+            prepared,
+            jobs=self.jobs,
+            grading_factory=self.grading_factory,
+            analysis_factory=self.analysis_factory,
+        )
+        dialog.completed.connect(self.report_requested.emit)
+        dialog.exec()
+        self.refresh()
 
     def create(self) -> None:
         dialog = QuestionDialog(self.service, self)

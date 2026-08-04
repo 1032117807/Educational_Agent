@@ -142,6 +142,7 @@ class ResourceIndexWorker(QRunnable):
 
 class ResourcesPage(QWidget):
     jobs_changed = Signal()
+    knowledge_drafts_ready = Signal(int)
 
     def __init__(
         self,
@@ -217,6 +218,7 @@ class ResourcesPage(QWidget):
             extraction_factory=extraction_factory,
         )
         self.qa_widget.jobs_changed.connect(self.jobs_changed.emit)
+        self.qa_widget.knowledge_drafts_ready.connect(self.knowledge_drafts_ready.emit)
         self.tabs = QTabWidget()
         self.tabs.addTab(self.views, "资料管理")
         self.tabs.addTab(self.qa_widget, "资料问答")

@@ -138,7 +138,8 @@ class AnalyticsPage(QWidget):
         self.tabs.addTab(self.error_chart, "错误类型")
         self.tabs.addTab(self.accuracy_chart, "正确率趋势")
         if self.report_factory is not None:
-            self.tabs.addTab(self._build_report_tab(), "AI 报告")
+            self.report_tab = self._build_report_tab()
+            self.tabs.addTab(self.report_tab, "AI 报告")
         root.addWidget(self.tabs, 1)
         self.refresh()
 
@@ -187,6 +188,15 @@ class AnalyticsPage(QWidget):
     def _dates(self) -> tuple[date, date]:
         days = {"最近 7 天": 7, "最近 30 天": 30, "最近 90 天": 90}[self.range.currentText()]
         return date.today() - timedelta(days=days - 1), date.today()
+
+    def open_today_report(self) -> None:
+        if self.report_factory is None:
+            return
+        self.tabs.setCurrentWidget(self.report_tab)
+        today = date.today()
+        self.report_start.setDate(QDate(today.year, today.month, today.day))
+        self.report_end.setDate(QDate(today.year, today.month, today.day))
+        self.report_status.setText("练习已完成，可生成今日 AI 报告")
 
     def refresh(self) -> None:
         start, end = self._dates()
