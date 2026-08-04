@@ -2,6 +2,7 @@ from app.core.config import AppSettings
 from app.database import Database
 from app.services.learning import LearningService
 from app.ui.main_window import CommandPalette, MainWindow
+from app.ui.practice_page import render_math_text
 
 
 def test_main_window_and_navigation(qtbot, tmp_path):
@@ -44,3 +45,8 @@ def test_command_palette_searches_and_navigates(qtbot, tmp_path):
             break
     palette.activate_current()
     assert window.stack.currentIndex() == 1
+
+
+def test_render_math_text_converts_common_latex():
+    rendered = render_math_text(r"\(\int_0^{n\pi}\sqrt{1+\sin 2x}\,dx\)")
+    assert rendered == "∫[0, nπ]√(1+sin 2x) dx"

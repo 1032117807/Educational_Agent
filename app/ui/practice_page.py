@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, timedelta
 from pathlib import Path
 from collections.abc import Callable
@@ -12,9 +13,9 @@ from PySide6.QtCharts import (
 from PySide6.QtCore import QDateTime, QObject, QRunnable, QThreadPool, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPainter
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
+    QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
     QInputDialog, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
-    QScrollArea, QSpinBox, QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QTextEdit,
+    QRadioButton, QScrollArea, QSpinBox, QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QTextEdit,
     QVBoxLayout, QWidget,
 )
 
@@ -43,6 +44,40 @@ def _selected_id(table: QTableWidget) -> int | None:
         return None
     item = table.item(row, 0)
     return int(item.data(Qt.UserRole)) if item else None
+
+
+def render_math_text(text: str) -> str:
+    """Turn common LaTeX emitted by question generators into readable Qt text."""
+    value = text.replace("\\n", "\n")
+    value = value.replace("\\(", "").replace("\\)", "")
+    value = value.replace("\\[", "").replace("\\]", "")
+    value = value.replace("\\left", "").replace("\\right", "")
+    value = value.replace("\\,", " ").replace("\\!", "")
+
+    def fraction(match: re.Match[str]) -> str:
+        return f"({render_math_text(match.group(1))})/({render_math_text(match.group(2))})"
+
+    def square_root(match: re.Match[str]) -> str:
+        return f"√({render_math_text(match.group(1))})"
+
+    def integral(match: re.Match[str]) -> str:
+        lower = render_math_text(match.group(1).strip("{}"))
+        upper = render_math_text(match.group(2).strip("{}"))
+        return f"∫[{lower}, {upper}]"
+
+    value = re.sub(r"\\frac\{([^{}]*)\}\{([^{}]*)\}", fraction, value)
+    value = re.sub(r"\\sqrt\{([^{}]*)\}", square_root, value)
+    value = re.sub(r"\\int_((?:\{[^{}]*\})|\S+)\^(\{[^{}]*\}|\S+)", integral, value)
+    replacements = {
+        r"\pi": "π", r"\theta": "θ", r"\alpha": "α", r"\beta": "β",
+        r"\gamma": "γ", r"\delta": "δ", r"\sin": "sin", r"\cos": "cos",
+        r"\tan": "tan", r"\ln": "ln", r"\log": "log", r"\cdot": "·",
+        r"\times": "×", r"\leq": "≤", r"\geq": "≥", r"\neq": "≠",
+    }
+    for source, target in replacements.items():
+        value = value.replace(source, target)
+    value = value.replace("{", "(").replace("}", ")")
+    return re.sub(r"\\([A-Za-z]+)", r"\1", value)
 
 
 class QuestionDialog(QDialog):
@@ -265,6 +300,11 @@ class PracticeDialog(QDialog):
         self.prompt.setStyleSheet("font-size: 18px; font-weight: 600; padding: 16px;")
         self.response = QTextEdit()
         self.response.setPlaceholderText("输入答案；多选答案用英文逗号分隔")
+        self.choice_area = QWidget()
+        self.choice_layout = QVBoxLayout(self.choice_area)
+        self.choice_layout.setContentsMargins(0, 0, 0, 0)
+        self.choice_buttons: list[QCheckBox | QRadioButton] = []
+        self.choice_group = QButtonGroup(self)
         self.feedback = QLabel()
         self.feedback.setWordWrap(True)
         buttons = QHBoxLayout()
@@ -289,6 +329,7 @@ class PracticeDialog(QDialog):
             buttons.addWidget(button)
         root.addWidget(self.progress)
         root.addWidget(self.prompt)
+        root.addWidget(self.choice_area)
         root.addWidget(self.response)
         root.addWidget(self.feedback)
         root.addLayout(buttons)
@@ -297,16 +338,54 @@ class PracticeDialog(QDialog):
     def show_question(self) -> None:
         question = self.questions[self.index]
         self.progress.setText(f"第 {self.index + 1} / {len(self.questions)} 题 · {question.kind} · 难度 {question.difficulty}")
-        visible_prompt = question.prompt
-        if question.options:
-            visible_prompt += "\n\n" + question.options
-        self.prompt.setText(visible_prompt)
-        self.response.setPlainText(self.responses.get(question.id, ""))
+        self.prompt.setText(render_math_text(question.prompt))
+        self._render_choices(question)
+        if self.choice_buttons:
+            self.response.clear()
+        else:
+            self.response.setPlainText(self.responses.get(question.id, ""))
         self.feedback.clear()
+
+    def _render_choices(self, question: object) -> None:
+        while self.choice_layout.count():
+            item = self.choice_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.choice_buttons = []
+        self.choice_group = QButtonGroup(self)
+        lines = [line.strip() for line in question.options.splitlines() if line.strip()]
+        is_choice = question.kind in {"单选", "多选", "判断"} and bool(lines)
+        self.choice_area.setVisible(is_choice)
+        self.response.setVisible(not is_choice)
+        if not is_choice:
+            return
+        selected = {part.strip().casefold() for part in self.responses.get(question.id, "").split(",")}
+        for line in lines:
+            match = re.match(r"\s*([A-Za-z])(?:[.、:：)|）])\s*(.*)", line)
+            value = match.group(1).upper() if match else line
+            label = render_math_text(line)
+            button = QCheckBox(label) if question.kind == "多选" else QRadioButton(label)
+            button.setProperty("answer_value", value)
+            button.setChecked(value.casefold() in selected)
+            if isinstance(button, QRadioButton):
+                self.choice_group.addButton(button)
+            self.choice_buttons.append(button)
+            self.choice_layout.addWidget(button)
+
+    def _response_value(self) -> str:
+        if not self.choice_buttons:
+            return self.response.toPlainText()
+        return ",".join(
+            str(button.property("answer_value"))
+            for button in self.choice_buttons if button.isChecked()
+        )
 
     def submit(self) -> None:
         question = self.questions[self.index]
-        response = self.response.toPlainText()
+        response = self._response_value()
+        if not response.strip():
+            QMessageBox.warning(self, "答案为空", "请选择或输入答案后再提交。")
+            return
         self.responses[question.id] = response
         if question.kind == "简答":
             result = QMessageBox.question(self, "简答题自评", f"标准答案：\n{question.answer}\n\n你的回答是否掌握？") == QMessageBox.Yes
@@ -404,7 +483,7 @@ class PracticeDialog(QDialog):
 
     def save_current_draft(self) -> None:
         question = self.questions[self.index]
-        response = self.response.toPlainText()
+        response = self._response_value()
         self.responses[question.id] = response
         self.service.save_draft(self.practice.id, question.id, response)
 
