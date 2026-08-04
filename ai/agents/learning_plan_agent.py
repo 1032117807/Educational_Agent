@@ -197,17 +197,47 @@ class LearningPlanAgentService:
         request: str,
         count: int,
         difficulty: int,
+        progress: Callable[[str, str, str], None] | None = None,
     ) -> GeneratedPractice:
         if self.question_factory is None:
             raise ValueError("题目生成服务未初始化")
-        result = self.question_factory().generate(
-            request,
-            course_id=course_id,
-            count=count,
-            kinds=["单选", "判断", "填空", "简答"],
-            difficulty=difficulty,
-            resource_ids=None,
-        )
+        service = self.question_factory()
+        try:
+            result = service.generate(
+                request,
+                course_id=course_id,
+                count=count,
+                kinds=["单选", "判断", "填空", "简答"],
+                difficulty=difficulty,
+                resource_ids=None,
+            )
+        except ValueError as first_error:
+            if progress is not None:
+                progress("question_generation.retry", "running", "模型返回空结果，追加引用格式后重试")
+            # Some compatible models return an empty structured list on the
+            # first pass. Retry once with the required evidence format explicit.
+            retry_request = (
+                f"{request}\n\n必须返回 {count} 道完整题目；每题必须包含答案、解析，"
+                "并在解析内引用提供的资料编号 [D1]、[D2] 等。不能返回空题目列表。"
+            )
+            try:
+                result = service.generate(
+                    retry_request,
+                    course_id=course_id,
+                    count=count,
+                    kinds=["单选", "判断", "填空", "简答"],
+                    difficulty=difficulty,
+                    resource_ids=None,
+                )
+                if progress is not None:
+                    progress("question_generation.retry", "completed", "重试成功")
+            except ValueError as retry_error:
+                if progress is not None:
+                    progress("question_generation.retry", "failed", str(retry_error))
+                raise ValueError(
+                    "题目生成失败：模型没有返回符合资料引用规则的题目。"
+                    "请先为该课程导入并建立资料索引，或稍后重试。"
+                ) from retry_error
         draft_service = QuestionDraftService(self.database)
         question_ids = tuple(draft_service.accept(draft_id) for draft_id in result.draft_ids)
         if not question_ids:

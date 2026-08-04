@@ -99,6 +99,7 @@ class AgentWorker(QRunnable):
                     request=self.question_request,
                     count=self.question_count,
                     difficulty=self.question_difficulty,
+                    progress=self.signals.tool_event.emit,
                 ))
                 self.signals.tool_event.emit("question_drafts.accept", "completed", "题目已入库并交给练习中心")
         except Exception as exc:
