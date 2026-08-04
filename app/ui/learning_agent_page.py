@@ -172,6 +172,9 @@ class LearningAgentPage(QWidget):
         splitter.addWidget(activity)
         splitter.setSizes([760, 320])
         root.addWidget(splitter, 1)
+        for label in self.findChildren(QLabel):
+            if "Agent" in label.text():
+                label.setText("AI 中心")
 
     def refresh(self) -> None:
         return
