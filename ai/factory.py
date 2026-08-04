@@ -255,7 +255,7 @@ def create_plan_generation_service(*, database: Database, app_settings: AppSetti
     )
 
 
-def create_learning_plan_agent_service(*, database: Database, app_settings: AppSettings) -> LearningPlanAgentService:
+def create_learning_plan_agent_service(*, database: Database, app_settings: AppSettings, tool_registry=None) -> LearningPlanAgentService:
     ai_settings = get_ai_settings()
     return LearningPlanAgentService(
         database=database,
@@ -263,5 +263,6 @@ def create_learning_plan_agent_service(*, database: Database, app_settings: AppS
         plan_factory=lambda: create_plan_generation_service(
             database=database, app_settings=app_settings
         ),
+        tool_registry=tool_registry,
     )
   

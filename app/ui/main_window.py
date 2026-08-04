@@ -194,7 +194,11 @@ class MainWindow(QMainWindow):
             agent_factory=lambda: create_learning_plan_agent_service(
                 database=self.service.database,
                 app_settings=self.config,
+                tool_registry=self.tool_registry,
             ),
+        )
+        agent_page.navigate_requested.connect(
+            lambda route: self._route_from_agent(route, agent_page, practice_page, analytics_page)
         )
         self.resources_page.knowledge_drafts_ready.connect(
             lambda course_id: self._open_knowledge_drafts(practice_page, course_id)
@@ -323,6 +327,33 @@ class MainWindow(QMainWindow):
     def _open_today_report(self, analytics_page: AnalyticsPage) -> None:
         self.navigate(6)
         analytics_page.open_today_report()
+
+    def _route_from_agent(
+        self,
+        route: str,
+        agent_page: LearningAgentPage,
+        practice_page: PracticePage,
+        analytics_page: AnalyticsPage,
+    ) -> None:
+        routes = {
+            "resources": 2,
+            "practice": 4,
+            "plan": 3,
+            "analytics": 6,
+            "review": 5,
+            "courses": 1,
+            "agent": 7,
+        }
+        index = routes.get(route)
+        if index is None:
+            return
+        self.navigate(index)
+        if route == "resources":
+            self.resources_page.tabs.setCurrentIndex(1)
+        elif route == "practice":
+            practice_page.tabs.setCurrentIndex(3)
+        elif route == "analytics":
+            analytics_page.open_today_report()
 
     def toggle_theme(self) -> None:
         current = str(self.preferences.value("theme", "light"))

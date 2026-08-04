@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-import json
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal
 from PySide6.QtWidgets import (
@@ -24,7 +23,7 @@ from app.services.domain import JobService
 class AgentWorkerSignals(QObject):
     decision = Signal(object)
     preview = Signal(object)
-    result = Signal(int)
+    result = Signal(object)
     failed = Signal(str)
     finished = Signal()
 
@@ -40,6 +39,9 @@ class AgentWorker(QRunnable):
         goal_id: int | None = None,
         daily_minutes: int = 60,
         draft_id: int | None = None,
+        tool_name: str | None = None,
+        tool_arguments: dict | None = None,
+        confirmed: bool = False,
     ) -> None:
         super().__init__()
         self.factory = factory
@@ -49,6 +51,9 @@ class AgentWorker(QRunnable):
         self.goal_id = goal_id
         self.daily_minutes = daily_minutes
         self.draft_id = draft_id
+        self.tool_name = tool_name
+        self.tool_arguments = tool_arguments or {}
+        self.confirmed = confirmed
         self.signals = AgentWorkerSignals()
         self.setAutoDelete(False)
 
@@ -64,6 +69,10 @@ class AgentWorker(QRunnable):
                 ))
             elif self.operation == "confirm":
                 self.signals.result.emit(service.confirm_plan(self.draft_id or 0))
+            elif self.operation == "tool":
+                self.signals.result.emit(service.execute_tool(
+                    self.tool_name or "", self.tool_arguments, confirmed=self.confirmed
+                ))
         except Exception as exc:
             self.signals.failed.emit(str(exc))
         finally:
@@ -71,6 +80,8 @@ class AgentWorker(QRunnable):
 
 
 class LearningAgentPage(QWidget):
+    navigate_requested = Signal(str)
+
     def __init__(
         self,
         *,
@@ -86,9 +97,20 @@ class LearningAgentPage(QWidget):
         self.pending_goal_id: int | None = None
         self.pending_daily_minutes = 60
         self.pending_draft_id: int | None = None
+        self.pending_tool: tuple[str, dict] | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
+        shortcuts = QHBoxLayout()
+        for label, route in (
+            ("资料问答", "resources"), ("题目与练习", "practice"),
+            ("学习计划", "plan"), ("学习报告", "analytics"), ("错题复习", "review"),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(lambda _=False, item=route: self.navigate_requested.emit(item))
+            shortcuts.addWidget(button)
+        shortcuts.addStretch()
+        root.addLayout(shortcuts)
         root.addWidget(QLabel("学习计划 Agent"))
         root.addWidget(QLabel("对话查看学习状态、生成计划草稿，并在确认后写入学习任务。"))
 
@@ -123,8 +145,12 @@ class LearningAgentPage(QWidget):
         self.commit_plan_button = QPushButton("确认写入学习任务")
         self.commit_plan_button.setEnabled(False)
         self.commit_plan_button.clicked.connect(self.commit_plan)
+        self.confirm_tool_button = QPushButton("确认执行操作")
+        self.confirm_tool_button.setEnabled(False)
+        self.confirm_tool_button.clicked.connect(self.commit_tool)
         activity_layout.addWidget(self.confirm_plan_button)
         activity_layout.addWidget(self.commit_plan_button)
+        activity_layout.addWidget(self.confirm_tool_button)
         splitter.addWidget(activity)
         splitter.setSizes([760, 320])
         root.addWidget(splitter, 1)
@@ -167,6 +193,16 @@ class LearningAgentPage(QWidget):
             self.confirm_plan_button.setEnabled(True)
             self.chat.append("\n计划会先生成草稿，不会立即写入任务。请确认后继续。")
 
+        elif decision.action == "navigate" and decision.route:
+            self.navigate_requested.emit(decision.route)
+            self.activity.addItem(f"已跳转到：{decision.route}")
+        elif decision.action == "tool" and decision.tool_name:
+            self.pending_tool = (decision.tool_name, decision.tool_arguments)
+            self.confirm_tool_button.setEnabled(True)
+            self.chat.append(
+                f"\n需要执行项目操作：`{decision.tool_name}`，请确认后执行。"
+            )
+
     def generate_plan(self) -> None:
         if self.pending_goal_id is None or self.worker is not None:
             return
@@ -201,16 +237,32 @@ class LearningAgentPage(QWidget):
             draft_id=self.pending_draft_id,
         ))
 
-    def receive_result(self, count: int) -> None:
+    def commit_tool(self) -> None:
+        if self.pending_tool is None or self.worker is not None:
+            return
+        name, arguments = self.pending_tool
+        self.confirm_tool_button.setEnabled(False)
+        self._start_worker(AgentWorker(
+            factory=self.agent_factory,
+            operation="tool",
+            tool_name=name,
+            tool_arguments=arguments,
+            confirmed=True,
+        ))
+
+    def receive_result(self, result: object) -> None:
+        count = result
         self.chat.append(f"\n**Agent**\n已确认并写入 {count} 个学习任务。")
         self.activity.addItem(f"已写入 {count} 个学习任务")
         self.pending_draft_id = None
+        self.pending_tool = None
 
     def receive_error(self, message: str) -> None:
         self.chat.append(f"\n**Agent**\n执行失败：{message}")
         self.activity.addItem("执行失败")
         self.confirm_plan_button.setEnabled(False)
         self.commit_plan_button.setEnabled(False)
+        self.confirm_tool_button.setEnabled(False)
         QMessageBox.warning(self, "Agent 执行失败", message)
 
     def worker_finished(self) -> None:
