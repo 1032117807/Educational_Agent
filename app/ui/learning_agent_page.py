@@ -25,6 +25,7 @@ class AgentWorkerSignals(QObject):
     preview = Signal(object)
     practice = Signal(object)
     result = Signal(object)
+    tool_event = Signal(str, str, str)
     failed = Signal(str)
     finished = Signal()
 
@@ -70,26 +71,37 @@ class AgentWorker(QRunnable):
         try:
             service = self.factory()
             if self.operation == "chat":
+                self.signals.tool_event.emit("agent.decide", "running", "分析对话意图")
                 self.signals.decision.emit(service.respond(self.message, self.history))
+                self.signals.tool_event.emit("agent.decide", "completed", "已得到执行决策")
             elif self.operation == "generate":
+                self.signals.tool_event.emit("learning_plan.generate", "running", "生成计划草稿")
                 self.signals.preview.emit(service.generate_plan(
                     goal_id=self.goal_id or 0,
                     daily_minutes=self.daily_minutes,
                 ))
+                self.signals.tool_event.emit("learning_plan.generate", "completed", "计划草稿已生成")
             elif self.operation == "confirm":
+                self.signals.tool_event.emit("learning_plan.confirm", "running", "写入学习任务")
                 self.signals.result.emit(service.confirm_plan(self.draft_id or 0))
+                self.signals.tool_event.emit("learning_plan.confirm", "completed", "学习任务已写入")
             elif self.operation == "tool":
+                self.signals.tool_event.emit(self.tool_name or "tool", "running", "执行通用工具")
                 self.signals.result.emit(service.execute_tool(
                     self.tool_name or "", self.tool_arguments, confirmed=self.confirmed
                 ))
+                self.signals.tool_event.emit(self.tool_name or "tool", "completed", "工具已执行")
             elif self.operation == "generate_questions":
+                self.signals.tool_event.emit("question_generation.generate", "running", self.question_request[:80])
                 self.signals.practice.emit(service.generate_questions(
                     course_id=self.course_id or 0,
                     request=self.question_request,
                     count=self.question_count,
                     difficulty=self.question_difficulty,
                 ))
+                self.signals.tool_event.emit("question_drafts.accept", "completed", "题目已入库并交给练习中心")
         except Exception as exc:
+            self.signals.tool_event.emit(self.operation, "failed", str(exc))
             self.signals.failed.emit(str(exc))
         finally:
             self.signals.finished.emit()
@@ -98,6 +110,7 @@ class AgentWorker(QRunnable):
 class LearningAgentPage(QWidget):
     navigate_requested = Signal(str)
     practice_requested = Signal(object)
+    new_window_requested = Signal()
 
     def __init__(
         self,
@@ -128,6 +141,9 @@ class LearningAgentPage(QWidget):
             button.clicked.connect(lambda _=False, item=route: self.navigate_requested.emit(item))
             shortcuts.addWidget(button)
         shortcuts.addStretch()
+        new_window = QPushButton("新建 Agent 窗口")
+        new_window.clicked.connect(self.new_window_requested.emit)
+        shortcuts.addWidget(new_window)
         root.addLayout(shortcuts)
         root.addWidget(QLabel("学习计划 Agent"))
         root.addWidget(QLabel("对话查看学习状态、生成计划草稿，并在确认后写入学习任务。"))
@@ -200,10 +216,15 @@ class LearningAgentPage(QWidget):
         worker.signals.preview.connect(self.receive_preview)
         worker.signals.practice.connect(self.receive_practice)
         worker.signals.result.connect(self.receive_result)
+        worker.signals.tool_event.connect(self.record_tool_event)
         worker.signals.failed.connect(self.receive_error)
         worker.signals.finished.connect(self.worker_finished)
         self.activity.addItem(f"开始：{worker.operation}")
         self.pool.start(worker)
+
+    def record_tool_event(self, tool_name: str, status: str, detail: str) -> None:
+        labels = {"running": "运行中", "completed": "完成", "failed": "失败"}
+        self.activity.addItem(f"{labels.get(status, status)}  {tool_name}\n{detail}")
 
     def receive_decision(self, decision: AgentDecision) -> None:
         self.chat.append(f"\n**Agent**\n{decision.reply}")
@@ -241,6 +262,7 @@ class LearningAgentPage(QWidget):
             f"\n**Agent**\n已生成 {len(generated.question_ids)} 道题目，正在交给练习中心。"
         )
         self.activity.addItem("题目已生成，交给练习中心")
+        self.record_tool_event("practice.open", "completed", "已打开生成题目的练习会话")
         self.practice_requested.emit(generated.question_ids)
 
     def generate_plan(self) -> None:

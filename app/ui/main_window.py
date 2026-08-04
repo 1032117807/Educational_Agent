@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1100, 700)
         self.resize(self.preferences.value("size", QSize(1440, 900)))
         self._nav_buttons: list[QPushButton] = []
+        self._agent_windows: list[QMainWindow] = []
         self.resources = ResourceService(service.database, config)
         self.questions = QuestionService(service.database)
         self.reviews = ReviewService(service.database)
@@ -202,6 +203,9 @@ class MainWindow(QMainWindow):
         )
         agent_page.practice_requested.connect(
             lambda question_ids: self._open_agent_practice(practice_page, question_ids)
+        )
+        agent_page.new_window_requested.connect(
+            lambda: self._open_agent_window(practice_page, analytics_page)
         )
         self.resources_page.knowledge_drafts_ready.connect(
             lambda course_id: self._open_knowledge_drafts(practice_page, course_id)
@@ -364,6 +368,37 @@ class MainWindow(QMainWindow):
         self.navigate(4)
         practice_page.tabs.setCurrentIndex(0)
         practice_page.start_practice_for_questions(question_ids)
+
+    def _open_agent_window(
+        self, practice_page: PracticePage, analytics_page: AnalyticsPage
+    ) -> None:
+        window = QMainWindow()
+        window.setWindowTitle("AI 中心")
+        window.resize(1180, 780)
+        page = LearningAgentPage(
+            jobs=self.jobs,
+            agent_factory=lambda: create_learning_plan_agent_service(
+                database=self.service.database,
+                app_settings=self.config,
+                tool_registry=self.tool_registry,
+            ),
+        )
+        page.navigate_requested.connect(
+            lambda route: self._route_from_agent(route, page, practice_page, analytics_page)
+        )
+        page.practice_requested.connect(
+            lambda question_ids: self._open_agent_practice(practice_page, question_ids)
+        )
+        page.new_window_requested.connect(
+            lambda: self._open_agent_window(practice_page, analytics_page)
+        )
+        window.setCentralWidget(page)
+        self._agent_windows.append(window)
+        window.destroyed.connect(
+            lambda *_: self._agent_windows.remove(window)
+            if window in self._agent_windows else None
+        )
+        window.show()
 
     def toggle_theme(self) -> None:
         current = str(self.preferences.value("theme", "light"))
