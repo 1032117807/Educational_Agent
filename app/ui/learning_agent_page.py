@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -172,7 +173,13 @@ class LearningAgentPage(QWidget):
         activity_layout = QVBoxLayout(activity)
         activity_layout.addWidget(QLabel("执行记录"))
         self.activity = QListWidget()
+        self.activity.currentItemChanged.connect(self.show_tool_detail)
         activity_layout.addWidget(self.activity, 1)
+        self.tool_detail = QPlainTextEdit()
+        self.tool_detail.setReadOnly(True)
+        self.tool_detail.setMaximumHeight(130)
+        self.tool_detail.setPlaceholderText("选择一次工具调用以查看参数、结果或错误信息")
+        activity_layout.addWidget(self.tool_detail)
         self.confirm_plan_button = QPushButton("确认生成计划草稿")
         self.confirm_plan_button.setEnabled(False)
         self.confirm_plan_button.clicked.connect(self.generate_plan)
@@ -225,6 +232,28 @@ class LearningAgentPage(QWidget):
     def record_tool_event(self, tool_name: str, status: str, detail: str) -> None:
         labels = {"running": "运行中", "completed": "完成", "failed": "失败"}
         self.activity.addItem(f"{labels.get(status, status)}  {tool_name}\n{detail}")
+
+    def record_tool_event(self, tool_name: str, status: str, detail: str) -> None:
+        labels = {
+            "queued": "等待", "running": "运行中", "completed": "完成", "failed": "失败",
+        }
+        item = QListWidgetItem(f"{labels.get(status, status)}  {tool_name}")
+        item.setData(Qt.UserRole, {"tool": tool_name, "status": status, "detail": detail})
+        self.activity.addItem(item)
+        self.activity.setCurrentItem(item)
+
+    def show_tool_detail(
+        self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
+    ) -> None:
+        if current is None:
+            self.tool_detail.clear()
+            return
+        event = current.data(Qt.UserRole) or {}
+        self.tool_detail.setPlainText(
+            f"工具：{event.get('tool', '')}\n"
+            f"状态：{event.get('status', '')}\n\n"
+            f"{event.get('detail', '')}"
+        )
 
     def receive_decision(self, decision: AgentDecision) -> None:
         self.chat.append(f"\n**Agent**\n{decision.reply}")
