@@ -40,3 +40,13 @@ def test_agent_resolves_the_only_active_goal(tmp_path):
     assert decision.goal_id == 1
     assert decision.daily_minutes == 45
     db.close()
+
+
+def test_agent_tool_arguments_are_parsed_from_json():
+    decision = AgentDecision(
+        reply="已准备完成任务。",
+        action="tool",
+        tool_name="study_task.complete",
+        tool_arguments_json='{"id": 12}',
+    )
+    assert decision.tool_arguments == {"id": 12}

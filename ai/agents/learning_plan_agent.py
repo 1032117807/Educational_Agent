@@ -29,11 +29,19 @@ class AgentDecision(BaseModel):
         "resources", "practice", "plan", "analytics", "review", "courses", "agent"
     ] | None = None
     tool_name: str | None = None
-    tool_arguments: dict = Field(default_factory=dict)
+    tool_arguments_json: str = "{}"
     course_id: int | None = None
     question_request: str = ""
     question_count: int = Field(default=5, ge=1, le=20)
     question_difficulty: int = Field(default=3, ge=1, le=5)
+
+    @property
+    def tool_arguments(self) -> dict:
+        try:
+            value = json.loads(self.tool_arguments_json or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return value if isinstance(value, dict) else {}
 
 
 @dataclass(frozen=True)
@@ -61,7 +69,8 @@ PROMPT = ChatPromptTemplate.from_messages([
 如果用户要求打开或使用某个功能，action 使用 navigate，并选择 route：
 resources=资料问答，practice=题库和 AI 出题/练习，plan=学习计划，analytics=学习分析和报告，
 review=错题复习，courses=课程管理，agent=本窗口。
-如果用户明确要求执行一个 available_tools 中的操作，action 使用 tool，填写 tool_name 和 tool_arguments。
+如果用户明确要求执行一个 available_tools 中的操作，action 使用 tool，填写 tool_name 和
+tool_arguments_json（一个 JSON 对象字符串，例如 {{"id": 12}}）。
 如果用户要求生成题目、练习题或测试题，action 使用 generate_questions，填写 question_request、
 question_count、question_difficulty 和 course_id；生成后应用会把题目交给练习中心。
 修改数据的工具必须等待用户确认；不要声称已经执行未确认的操作。
