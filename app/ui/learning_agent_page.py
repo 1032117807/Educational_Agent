@@ -147,6 +147,10 @@ class LearningAgentPage(QWidget):
         new_window.clicked.connect(self.new_window_requested.emit)
         shortcuts.addWidget(new_window)
         root.addLayout(shortcuts)
+        for index in range(shortcuts.count()):
+            widget = shortcuts.itemAt(index).widget()
+            if widget is not None:
+                widget.hide()
         root.addWidget(QLabel("学习计划 Agent"))
         root.addWidget(QLabel("对话查看学习状态、生成计划草稿，并在确认后写入学习任务。"))
 

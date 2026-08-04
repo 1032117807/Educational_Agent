@@ -21,6 +21,10 @@ def test_main_window_and_navigation(qtbot, tmp_path):
     analytics_page = window.stack.widget(6)
     assert analytics_page.tabs.tabText(6) == "AI 报告"
     assert window.stack.widget(7).windowTitle() == ""
+    window._open_agent_window(practice_page, analytics_page)
+    assert window.stack.count() == 13
+    assert window.stack.currentIndex() == 12
+    assert window._nav_buttons[-1].text() == "Agent 2"
     window.navigate(3)
     assert window.stack.currentIndex() == 3
 

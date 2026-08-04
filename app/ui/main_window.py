@@ -46,7 +46,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1100, 700)
         self.resize(self.preferences.value("size", QSize(1440, 900)))
         self._nav_buttons: list[QPushButton] = []
-        self._agent_windows: list[QMainWindow] = []
+        self._agent_session_count = 1
         self.resources = ResourceService(service.database, config)
         self.questions = QuestionService(service.database)
         self.reviews = ReviewService(service.database)
@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
         self.sidebar.setObjectName("sidebar")
         self.sidebar.setFixedWidth(230)
         nav = QVBoxLayout(self.sidebar)
+        self._nav_layout = nav
         nav.setContentsMargins(14, 18, 14, 16)
         brand = QLabel("个性化学习助手")
         brand.setObjectName("brand")
@@ -372,9 +373,6 @@ class MainWindow(QMainWindow):
     def _open_agent_window(
         self, practice_page: PracticePage, analytics_page: AnalyticsPage
     ) -> None:
-        window = QMainWindow()
-        window.setWindowTitle("AI 中心")
-        window.resize(1180, 780)
         page = LearningAgentPage(
             jobs=self.jobs,
             agent_factory=lambda: create_learning_plan_agent_service(
@@ -392,13 +390,15 @@ class MainWindow(QMainWindow):
         page.new_window_requested.connect(
             lambda: self._open_agent_window(practice_page, analytics_page)
         )
-        window.setCentralWidget(page)
-        self._agent_windows.append(window)
-        window.destroyed.connect(
-            lambda *_: self._agent_windows.remove(window)
-            if window in self._agent_windows else None
-        )
-        window.show()
+        index = self.stack.addWidget(page)
+        self._agent_session_count += 1
+        button = QPushButton(f"Agent {self._agent_session_count}")
+        button.setCheckable(True)
+        button.setMinimumHeight(38)
+        button.clicked.connect(lambda: self.navigate(self.stack.indexOf(page)))
+        self._nav_layout.insertWidget(self._nav_layout.count() - 2, button)
+        self._nav_buttons.append(button)
+        self.navigate(index)
 
     def toggle_theme(self) -> None:
         current = str(self.preferences.value("theme", "light"))
