@@ -130,10 +130,11 @@ class KnowledgeExtractionService:
         *,
         course_id: int,
         resource_ids: list[int] | None = None,
+        chunk_ids: list[int] | None = None,
         progress: Callable[[int], None] | None = None,
         should_cancel: Callable[[], bool] | None = None,
     ) -> ExtractionResult:
-        course_name, chunks = self._load_chunks(course_id, resource_ids)
+        course_name, chunks = self._load_chunks(course_id, resource_ids, chunk_ids)
         if not chunks:
             raise ValueError("所选范围没有已完成索引的资料片段")
         run_id = self._create_run(course_id, resource_ids, len(chunks))
@@ -164,8 +165,27 @@ class KnowledgeExtractionService:
             self._fail_run(run_id, str(exc))
             raise
 
+    def extract_selected(
+        self,
+        *,
+        course_id: int,
+        chunk_ids: list[int],
+        progress: Callable[[int], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> ExtractionResult:
+        selected = list(dict.fromkeys(chunk_ids))
+        if not selected:
+            raise ValueError("至少选择一个资料片段")
+        return self.extract(
+            course_id=course_id,
+            chunk_ids=selected,
+            progress=progress,
+            should_cancel=should_cancel,
+        )
+
     def _load_chunks(
-        self, course_id: int, resource_ids: list[int] | None
+        self, course_id: int, resource_ids: list[int] | None,
+        chunk_ids: list[int] | None = None,
     ) -> tuple[str, list[DocumentChunk]]:
         with self.database.session() as session:
             course = session.get(Course, course_id)
@@ -183,6 +203,8 @@ class KnowledgeExtractionService:
             )
             if resource_ids:
                 stmt = stmt.where(DocumentChunk.resource_id.in_(resource_ids))
+            if chunk_ids:
+                stmt = stmt.where(DocumentChunk.id.in_(chunk_ids))
             return course.name, list(session.scalars(stmt))
 
     @staticmethod

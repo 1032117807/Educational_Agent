@@ -18,6 +18,7 @@ from ai.chains import (
     QuestionGenerationService,
     SubjectiveGradingService,
 )
+from ai.reports import LearningReportService
 
 from ai.retrieval import (
     ChromaVectorIndex,
@@ -232,6 +233,14 @@ def create_error_analysis_service(
         provider=ai_settings.provider,
         model_name=ai_settings.chat_model,
         batch_size=ai_settings.knowledge_extraction_batch_size,
+    )
+
+
+def create_learning_report_service(*, database: Database, app_settings: AppSettings) -> LearningReportService:
+    ai_settings = get_ai_settings()
+    return LearningReportService(
+        database=database,
+        chat_model=create_chat_model(ai_settings),
     )
 
 

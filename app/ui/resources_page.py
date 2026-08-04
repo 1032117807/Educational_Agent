@@ -25,7 +25,7 @@ from app.services.domain import (
 from app.tools.registry import ToolRegistry
 from app.ui.pages import page_title, stat_card
 from app.ui.icons import IconProvider
-from ai.chains import GroundedQAService
+from ai.chains import GroundedQAService, KnowledgeExtractionService
 from ai.indexing import ResourceIndexingPipeline
 from app.ui.resource_qa_widget import ResourceQAWidget
 
@@ -150,6 +150,7 @@ class ResourcesPage(QWidget):
         *,
         indexing_factory: Callable[[], ResourceIndexingPipeline],
         qa_factory: Callable[[], GroundedQAService],
+        extraction_factory: Callable[[], KnowledgeExtractionService],
     ) -> None:
         super().__init__()
         self.service = service
@@ -213,6 +214,7 @@ class ResourcesPage(QWidget):
             resources=self.service,
             jobs=self.jobs,
             qa_factory=qa_factory,
+            extraction_factory=extraction_factory,
         )
         self.qa_widget.jobs_changed.connect(self.jobs_changed.emit)
         self.tabs = QTabWidget()

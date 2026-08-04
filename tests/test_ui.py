@@ -17,6 +17,8 @@ def test_main_window_and_navigation(qtbot, tmp_path):
     practice_page = window.stack.widget(4)
     assert practice_page.tabs.count() == 4
     assert practice_page.tabs.tabText(3) == "AI 出题"
+    analytics_page = window.stack.widget(6)
+    assert analytics_page.tabs.tabText(6) == "AI 报告"
     window.navigate(3)
     assert window.stack.currentIndex() == 3
 

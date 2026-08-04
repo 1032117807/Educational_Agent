@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -8,10 +9,10 @@ from PySide6.QtCharts import (
     QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView, QDateTimeAxis,
     QLineSeries, QValueAxis,
 )
-from PySide6.QtCore import QDateTime, QObject, QRunnable, QThreadPool, Qt, QUrl, Signal
+from PySide6.QtCore import QDate, QDateTime, QObject, QRunnable, QThreadPool, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPainter
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
+    QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
     QInputDialog, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
     QScrollArea, QSpinBox, QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QTextEdit,
     QVBoxLayout, QWidget,
@@ -23,6 +24,7 @@ from app.services.domain import (
 from app.tools.registry import ToolRegistry
 from app.ui.pages import page_title, stat_card
 from app.ui.icons import IconProvider
+from ai.reports import LearningReport, LearningReportService
 
 
 def _selected_id(table: QTableWidget) -> int | None:
@@ -33,10 +35,65 @@ def _selected_id(table: QTableWidget) -> int | None:
     return int(item.data(Qt.UserRole)) if item else None
 
 
+class LearningReportSignals(QObject):
+    succeeded = Signal(object)
+    failed = Signal(str)
+    finished = Signal()
+
+
+class LearningReportWorker(QRunnable):
+    def __init__(
+        self,
+        *,
+        factory: Callable[[], LearningReportService],
+        jobs: JobService | None,
+        job_id: int | None,
+        start_date: date,
+        end_date: date,
+    ) -> None:
+        super().__init__()
+        self.factory = factory
+        self.jobs = jobs
+        self.job_id = job_id
+        self.start_date = start_date
+        self.end_date = end_date
+        self.signals = LearningReportSignals()
+        self.setAutoDelete(False)
+
+    def run(self) -> None:
+        try:
+            if self.jobs is not None and self.job_id is not None:
+                self.jobs.update(self.job_id, "running", 20, "正在计算学习统计")
+            report = self.factory().generate(
+                start_date=self.start_date,
+                end_date=self.end_date,
+            )
+            if self.jobs is not None and self.job_id is not None:
+                self.jobs.update(self.job_id, "completed", 100, "AI 学习报告生成完成")
+            self.signals.succeeded.emit(report)
+        except Exception as exc:
+            if self.jobs is not None and self.job_id is not None:
+                self.jobs.update(self.job_id, "failed", 100, "AI 学习报告生成失败", str(exc))
+            self.signals.failed.emit(str(exc))
+        finally:
+            self.signals.finished.emit()
+
+
 class AnalyticsPage(QWidget):
-    def __init__(self, service: AnalyticsService) -> None:
+    jobs_changed = Signal()
+
+    def __init__(
+        self,
+        service: AnalyticsService,
+        *,
+        jobs: JobService | None = None,
+        report_factory: Callable[[], LearningReportService] | None = None,
+    ) -> None:
         super().__init__()
         self.service = service
+        self.jobs = jobs
+        self.report_factory = report_factory
+        self.report_worker: LearningReportWorker | None = None
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.addLayout(page_title("学习分析", "统计仅来自本地真实任务、练习和学习记录"))
@@ -72,15 +129,44 @@ class AnalyticsPage(QWidget):
         self.knowledge.horizontalHeader().setStretchLastSection(True)
         self.error_chart = QChartView()
         self.accuracy_chart = QChartView()
-        tabs = QTabWidget()
-        tabs.addTab(self.chart_view, "学习时长")
-        tabs.addTab(self.task_chart, "任务完成")
-        tabs.addTab(self.course_chart, "课程分布")
-        tabs.addTab(self.knowledge, "知识点掌握")
-        tabs.addTab(self.error_chart, "错误类型")
-        tabs.addTab(self.accuracy_chart, "正确率趋势")
-        root.addWidget(tabs, 1)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.chart_view, "学习时长")
+        self.tabs.addTab(self.task_chart, "任务完成")
+        self.tabs.addTab(self.course_chart, "课程分布")
+        self.tabs.addTab(self.knowledge, "知识点掌握")
+        self.tabs.addTab(self.error_chart, "错误类型")
+        self.tabs.addTab(self.accuracy_chart, "正确率趋势")
+        if self.report_factory is not None:
+            self.tabs.addTab(self._build_report_tab(), "AI 报告")
+        root.addWidget(self.tabs, 1)
         self.refresh()
+
+    def _build_report_tab(self) -> QWidget:
+        page = QWidget()
+        root = QVBoxLayout(page)
+        controls = QHBoxLayout()
+        self.report_start = QDateEdit()
+        self.report_start.setCalendarPopup(True)
+        self.report_end = QDateEdit()
+        self.report_end.setCalendarPopup(True)
+        start, end = self._dates()
+        self.report_start.setDate(QDate(start.year, start.month, start.day))
+        self.report_end.setDate(QDate(end.year, end.month, end.day))
+        self.report_button = QPushButton("生成 AI 报告")
+        self.report_button.clicked.connect(self.generate_report)
+        controls.addWidget(QLabel("开始"))
+        controls.addWidget(self.report_start)
+        controls.addWidget(QLabel("结束"))
+        controls.addWidget(self.report_end)
+        controls.addWidget(self.report_button)
+        controls.addStretch()
+        self.report_status = QLabel("就绪")
+        controls.addWidget(self.report_status)
+        root.addLayout(controls)
+        self.report_text = QTextEdit()
+        self.report_text.setReadOnly(True)
+        root.addWidget(self.report_text, 1)
+        return page
 
     def _dates(self) -> tuple[date, date]:
         days = {"最近 7 天": 7, "最近 30 天": 30, "最近 90 天": 90}[self.range.currentText()]
@@ -159,6 +245,72 @@ class AnalyticsPage(QWidget):
         accuracy_series.attachAxis(accuracy_x)
         accuracy_series.attachAxis(accuracy_y)
         self.accuracy_chart.setChart(accuracy_chart)
+
+    def generate_report(self) -> None:
+        if self.report_factory is None:
+            return
+        start = self.report_start.date().toPython()
+        end = self.report_end.date().toPython()
+        if end < start:
+            QMessageBox.warning(self, "AI 报告", "结束日期不能早于开始日期。")
+            return
+        job_id = None
+        if self.jobs is not None:
+            job_id = self.jobs.create("learning_report", "生成 AI 学习报告").id
+            self.jobs_changed.emit()
+        self.report_button.setEnabled(False)
+        self.report_status.setText("正在生成")
+        worker = LearningReportWorker(
+            factory=self.report_factory,
+            jobs=self.jobs,
+            job_id=job_id,
+            start_date=start,
+            end_date=end,
+        )
+        worker.signals.succeeded.connect(self.show_report)
+        worker.signals.failed.connect(self.show_report_error)
+        worker.signals.finished.connect(lambda: self.report_button.setEnabled(True))
+        worker.signals.finished.connect(self.jobs_changed.emit)
+        self.report_worker = worker
+        QThreadPool.globalInstance().start(worker)
+
+    def show_report(self, report: LearningReport) -> None:
+        stats = report.stats
+        explanation = report.explanation
+        sections = [
+            "# AI 学习报告",
+            f"周期：{stats.start_date} 至 {stats.end_date}",
+            "",
+            "## 真实统计",
+            f"- 学习时长：{stats.study_minutes} 分钟",
+            f"- 任务完成：{stats.task_completed}/{stats.task_total}（{stats.task_completion_rate:.0%}）",
+            f"- 练习正确：{stats.correct_total}/{stats.attempt_total}（{stats.accuracy:.0%}）",
+            "",
+            "## 总结",
+            explanation.summary,
+            "",
+            "## 优势",
+            self._format_report_list(explanation.strengths),
+            "",
+            "## 薄弱点",
+            self._format_report_list(explanation.weaknesses),
+            "",
+            "## 建议",
+            self._format_report_list(explanation.recommendations),
+            "",
+            "## 下周重点",
+            self._format_report_list(explanation.next_week_priorities),
+        ]
+        self.report_text.setMarkdown("\n".join(sections))
+        self.report_status.setText("完成")
+
+    def show_report_error(self, message: str) -> None:
+        self.report_status.setText("失败")
+        QMessageBox.warning(self, "AI 报告失败", message)
+
+    @staticmethod
+    def _format_report_list(items: list[str]) -> str:
+        return "\n".join(f"- {item}" for item in items) if items else "- 暂无"
 
     @staticmethod
     def _bar_chart(title: str, categories: list[str], values: list[int], series_name: str) -> QChart:

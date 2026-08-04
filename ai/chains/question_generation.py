@@ -45,7 +45,8 @@ DOCUMENT_CITATION_PATTERN = re.compile(r"\[D(\d+)]")
 
 
 class GeneratedQuestion(BaseModel):
-    knowledge_point_id: int = Field(
+    knowledge_point_id: int | None = Field(
+        default=None,
         description="题目对应的正式知识点 ID"
     )
 
@@ -255,11 +256,6 @@ class QuestionGenerationService:
                 limit=self.knowledge_limit,
             )
 
-            if not knowledge_hits:
-                raise ValueError(
-                    "没有召回正式知识点，请先审核并建立知识点索引"
-                )
-
             document_query = self._build_document_query(
                 normalized_request,
                 knowledge_hits,
@@ -422,8 +418,8 @@ class QuestionGenerationService:
                 )
 
             if (
-                question.knowledge_point_id
-                not in available_knowledge_ids
+                question.knowledge_point_id is not None
+                and question.knowledge_point_id not in available_knowledge_ids
             ):
                 raise ValueError(
                     f"第 {index} 道题引用了未召回的知识点"

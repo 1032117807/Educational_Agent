@@ -6,6 +6,7 @@ from ai.factory import (
     create_grounded_qa_service,
     create_knowledge_extraction_service,
     create_knowledge_point_index,
+    create_learning_report_service,
     create_question_generation_service,
     create_resource_indexing_pipeline,
     create_subjective_grading_service,
@@ -136,6 +137,10 @@ class MainWindow(QMainWindow):
                 database=self.service.database,
                 app_settings=self.config,
             ),
+            extraction_factory=lambda: create_knowledge_extraction_service(
+                database=self.service.database,
+                app_settings=self.config,
+            ),
         )
         self.resources_page.jobs_changed.connect(self.update_status)
         practice_page = PracticePage(
@@ -173,6 +178,15 @@ class MainWindow(QMainWindow):
             )
         jobs_page = JobsPage(self.jobs)
         jobs_page.retry_requested.connect(self.retry_job)
+        analytics_page = AnalyticsPage(
+            self.analytics,
+            jobs=self.jobs,
+            report_factory=lambda: create_learning_report_service(
+                database=self.service.database,
+                app_settings=self.config,
+            ),
+        )
+        analytics_page.jobs_changed.connect(self.update_status)
         pages: list[tuple[str, QWidget]] = [
             ("首页", DashboardPage(self.service)),
             ("我的课程", CoursesPage(self.service)),
@@ -187,7 +201,7 @@ class MainWindow(QMainWindow):
             )),
             ("练习中心", practice_page),
             ("错题与复习", ReviewPage(self.reviews)),
-            ("学习分析", AnalyticsPage(self.analytics)),
+            ("学习分析", analytics_page),
             ("工具中心", ToolsPage(self.tool_registry)),
             ("后台任务", jobs_page),
             ("日志查看器", LogsPage(self.config.log_dir / "app.log")),

@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ai.chains import GroundedQAService, RAGAnswer
+from ai.chains import GroundedQAService, RAGAnswer, KnowledgeExtractionService
 from app.services.domain import JobService, ResourceService
 
 
@@ -101,6 +101,38 @@ class QAWorker(QRunnable):
             self.signals.finished.emit()
 
 
+class LazyKnowledgeWorker(QRunnable):
+    def __init__(self, *, extraction_factory, jobs, job_id, course_id, chunk_ids):
+        super().__init__()
+        self.extraction_factory = extraction_factory
+        self.jobs = jobs
+        self.job_id = job_id
+        self.course_id = course_id
+        self.chunk_ids = chunk_ids
+        self.signals = QAWorkerSignals()
+        self.setAutoDelete(False)
+
+    def run(self) -> None:
+        try:
+            self.jobs.update(self.job_id, "running", 15, "正在总结引用片段中的知识点")
+            result = self.extraction_factory().extract_selected(
+                course_id=self.course_id,
+                chunk_ids=self.chunk_ids,
+                progress=lambda value: self.jobs.update(
+                    self.job_id, "running", value, "正在生成待审核知识点"
+                ),
+                should_cancel=lambda: self.jobs.is_cancelled(self.job_id),
+            )
+            message = f"已生成 {result.draft_count} 条待审核知识点草稿"
+            self.jobs.update(self.job_id, "completed", 100, message)
+            self.signals.succeeded.emit(message)
+        except Exception as exc:
+            self.jobs.update(self.job_id, "failed", 100, "按需知识总结失败", str(exc))
+            self.signals.failed.emit(str(exc))
+        finally:
+            self.signals.finished.emit()
+
+
 class ResourceQAWidget(QWidget):
     jobs_changed = Signal()
 
@@ -110,14 +142,18 @@ class ResourceQAWidget(QWidget):
         resources: ResourceService,
         jobs: JobService,
         qa_factory: Callable[[], GroundedQAService],
+        extraction_factory: Callable[[], KnowledgeExtractionService],
     ) -> None:
         super().__init__()
         self.resources = resources
         self.jobs = jobs
         self.qa_factory = qa_factory
+        self.extraction_factory = extraction_factory
         self.pool = QThreadPool.globalInstance()
         self._worker: QAWorker | None = None
         self._citations: dict[int, object] = {}
+        self._last_result: RAGAnswer | None = None
+        self._memory_worker = None
 
         root = QVBoxLayout(self)
         description = QLabel(
@@ -146,6 +182,10 @@ class ResourceQAWidget(QWidget):
         self.clear_button = QPushButton("清空")
         self.clear_button.clicked.connect(self.clear)
         actions.addWidget(self.clear_button)
+        self.remember_button = QPushButton("总结为知识点")
+        self.remember_button.setEnabled(False)
+        self.remember_button.clicked.connect(self.remember_knowledge)
+        actions.addWidget(self.remember_button)
         actions.addStretch()
         self.status_label = QLabel("就绪")
         actions.addWidget(self.status_label)
@@ -249,6 +289,8 @@ class ResourceQAWidget(QWidget):
         self.pool.start(worker)
 
     def _answer_succeeded(self, result: RAGAnswer) -> None:
+        self._last_result = result
+        self.remember_button.setEnabled(bool(result.citations))
         self._citations = {
             citation.number: citation for citation in result.citations
         }
@@ -283,6 +325,8 @@ class ResourceQAWidget(QWidget):
         self.status_label.setText(f"完成 · {len(result.citations)} 条引用")
 
     def _answer_failed(self, message: str) -> None:
+        self._last_result = None
+        self.remember_button.setEnabled(False)
         self.answer.setPlainText("资料问答失败。\n\n" + message)
         self.status_label.setText("失败")
 
@@ -296,6 +340,37 @@ class ResourceQAWidget(QWidget):
 
     def _release_worker(self) -> None:
         self._worker = None
+
+    def remember_knowledge(self) -> None:
+        if self._last_result is None or not self._last_result.citations:
+            QMessageBox.information(self, "知识总结", "当前回答没有可总结的资料引用。")
+            return
+        course_id = self.course.currentData()
+        if course_id is None:
+            QMessageBox.warning(self, "知识总结", "请先选择一个课程范围。")
+            return
+        chunk_ids = list(dict.fromkeys(
+            citation.chunk_id for citation in self._last_result.citations
+        ))
+        job = self.jobs.create("lazy_knowledge_extraction", "总结当前回答引用片段")
+        self.remember_button.setEnabled(False)
+        worker = LazyKnowledgeWorker(
+            extraction_factory=self.extraction_factory,
+            jobs=self.jobs,
+            job_id=job.id,
+            course_id=course_id,
+            chunk_ids=chunk_ids,
+        )
+        worker.signals.succeeded.connect(
+            lambda message: QMessageBox.information(self, "知识总结完成", message)
+        )
+        worker.signals.failed.connect(
+            lambda message: QMessageBox.warning(self, "知识总结失败", message)
+        )
+        worker.signals.finished.connect(lambda: self.remember_button.setEnabled(True))
+        worker.signals.finished.connect(self.jobs_changed.emit)
+        self._memory_worker = worker
+        self.pool.start(worker)
 
     def _show_excerpt(
         self,
@@ -356,4 +431,6 @@ class ResourceQAWidget(QWidget):
         self.citation_list.clear()
         self.excerpt.clear()
         self._citations.clear()
+        self._last_result = None
+        self.remember_button.setEnabled(False)
         self.status_label.setText("就绪")
