@@ -579,8 +579,11 @@ class PracticePage(QWidget):
         self.question_generation_widget.prefill_for_knowledge(course_id, knowledge_name)
 
     def start_practice_for_question(self, question_id: int) -> None:
+        self.start_practice_for_questions([question_id])
+
+    def start_practice_for_questions(self, question_ids: list[int] | tuple[int, ...]) -> None:
         try:
-            prepared = self.service.create_practice_for_questions([question_id])
+            prepared = self.service.create_practice_for_questions(list(question_ids))
         except ValueError as exc:
             QMessageBox.warning(self, "无法开始练习", str(exc))
             return

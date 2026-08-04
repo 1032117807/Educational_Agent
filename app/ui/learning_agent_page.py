@@ -16,13 +16,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ai.agents import AgentDecision, LearningPlanAgentService, PlanPreview
+from ai.agents import AgentDecision, GeneratedPractice, LearningPlanAgentService, PlanPreview
 from app.services.domain import JobService
 
 
 class AgentWorkerSignals(QObject):
     decision = Signal(object)
     preview = Signal(object)
+    practice = Signal(object)
     result = Signal(object)
     failed = Signal(str)
     finished = Signal()
@@ -42,6 +43,10 @@ class AgentWorker(QRunnable):
         tool_name: str | None = None,
         tool_arguments: dict | None = None,
         confirmed: bool = False,
+        course_id: int | None = None,
+        question_request: str = "",
+        question_count: int = 5,
+        question_difficulty: int = 3,
     ) -> None:
         super().__init__()
         self.factory = factory
@@ -54,6 +59,10 @@ class AgentWorker(QRunnable):
         self.tool_name = tool_name
         self.tool_arguments = tool_arguments or {}
         self.confirmed = confirmed
+        self.course_id = course_id
+        self.question_request = question_request
+        self.question_count = question_count
+        self.question_difficulty = question_difficulty
         self.signals = AgentWorkerSignals()
         self.setAutoDelete(False)
 
@@ -73,6 +82,13 @@ class AgentWorker(QRunnable):
                 self.signals.result.emit(service.execute_tool(
                     self.tool_name or "", self.tool_arguments, confirmed=self.confirmed
                 ))
+            elif self.operation == "generate_questions":
+                self.signals.practice.emit(service.generate_questions(
+                    course_id=self.course_id or 0,
+                    request=self.question_request,
+                    count=self.question_count,
+                    difficulty=self.question_difficulty,
+                ))
         except Exception as exc:
             self.signals.failed.emit(str(exc))
         finally:
@@ -81,6 +97,7 @@ class AgentWorker(QRunnable):
 
 class LearningAgentPage(QWidget):
     navigate_requested = Signal(str)
+    practice_requested = Signal(object)
 
     def __init__(
         self,
@@ -98,6 +115,7 @@ class LearningAgentPage(QWidget):
         self.pending_daily_minutes = 60
         self.pending_draft_id: int | None = None
         self.pending_tool: tuple[str, dict] | None = None
+        self.pending_question_generation: tuple[int, str, int, int] | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
@@ -177,6 +195,7 @@ class LearningAgentPage(QWidget):
         self.send_button.setEnabled(False)
         worker.signals.decision.connect(self.receive_decision)
         worker.signals.preview.connect(self.receive_preview)
+        worker.signals.practice.connect(self.receive_practice)
         worker.signals.result.connect(self.receive_result)
         worker.signals.failed.connect(self.receive_error)
         worker.signals.finished.connect(self.worker_finished)
@@ -202,6 +221,24 @@ class LearningAgentPage(QWidget):
             self.chat.append(
                 f"\n需要执行项目操作：`{decision.tool_name}`，请确认后执行。"
             )
+
+        elif decision.action == "generate_questions":
+            if not decision.course_id or not decision.question_request:
+                self.chat.append("\n请补充课程和题目要求。")
+                return
+            self.pending_question_generation = (
+                decision.course_id,
+                decision.question_request,
+                decision.question_count,
+                decision.question_difficulty,
+            )
+
+    def receive_practice(self, generated: GeneratedPractice) -> None:
+        self.chat.append(
+            f"\n**Agent**\n已生成 {len(generated.question_ids)} 道题目，正在交给练习中心。"
+        )
+        self.activity.addItem("题目已生成，交给练习中心")
+        self.practice_requested.emit(generated.question_ids)
 
     def generate_plan(self) -> None:
         if self.pending_goal_id is None or self.worker is not None:
@@ -267,4 +304,16 @@ class LearningAgentPage(QWidget):
 
     def worker_finished(self) -> None:
         self.worker = None
+        if self.pending_question_generation is not None:
+            course_id, request, count, difficulty = self.pending_question_generation
+            self.pending_question_generation = None
+            self._start_worker(AgentWorker(
+                factory=self.agent_factory,
+                operation="generate_questions",
+                course_id=course_id,
+                question_request=request,
+                question_count=count,
+                question_difficulty=difficulty,
+            ))
+            return
         self.send_button.setEnabled(True)

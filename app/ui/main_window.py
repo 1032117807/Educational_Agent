@@ -200,6 +200,9 @@ class MainWindow(QMainWindow):
         agent_page.navigate_requested.connect(
             lambda route: self._route_from_agent(route, agent_page, practice_page, analytics_page)
         )
+        agent_page.practice_requested.connect(
+            lambda question_ids: self._open_agent_practice(practice_page, question_ids)
+        )
         self.resources_page.knowledge_drafts_ready.connect(
             lambda course_id: self._open_knowledge_drafts(practice_page, course_id)
         )
@@ -354,6 +357,13 @@ class MainWindow(QMainWindow):
             practice_page.tabs.setCurrentIndex(3)
         elif route == "analytics":
             analytics_page.open_today_report()
+
+    def _open_agent_practice(
+        self, practice_page: PracticePage, question_ids: list[int] | tuple[int, ...]
+    ) -> None:
+        self.navigate(4)
+        practice_page.tabs.setCurrentIndex(0)
+        practice_page.start_practice_for_questions(question_ids)
 
     def toggle_theme(self) -> None:
         current = str(self.preferences.value("theme", "light"))

@@ -264,5 +264,8 @@ def create_learning_plan_agent_service(*, database: Database, app_settings: AppS
             database=database, app_settings=app_settings
         ),
         tool_registry=tool_registry,
+        question_factory=lambda: create_question_generation_service(
+            database=database, app_settings=app_settings
+        ),
     )
   

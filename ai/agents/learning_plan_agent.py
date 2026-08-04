@@ -12,14 +12,17 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from ai.chains.plan_generation import PlanGenerationService
+from ai.chains.question_generation import QuestionGenerationService, QuestionDraftService
 from app.database import Database
-from app.models import KnowledgePoint, LearningPlanDraft, StudyGoal, StudyTask
+from app.models import Course, KnowledgePoint, LearningPlanDraft, StudyGoal, StudyTask
 from app.tools.registry import ToolRegistry
 
 
 class AgentDecision(BaseModel):
     reply: str = Field(description="给学习者的简洁中文回复")
-    action: Literal["chat", "show_status", "generate_plan", "navigate", "tool"] = "chat"
+    action: Literal[
+        "chat", "show_status", "generate_plan", "generate_questions", "navigate", "tool"
+    ] = "chat"
     goal_id: int | None = None
     daily_minutes: int = Field(default=60, ge=5, le=480)
     route: Literal[
@@ -27,6 +30,10 @@ class AgentDecision(BaseModel):
     ] | None = None
     tool_name: str | None = None
     tool_arguments: dict = Field(default_factory=dict)
+    course_id: int | None = None
+    question_request: str = ""
+    question_count: int = Field(default=5, ge=1, le=20)
+    question_difficulty: int = Field(default=3, ge=1, le=5)
 
 
 @dataclass(frozen=True)
@@ -35,6 +42,12 @@ class PlanPreview:
     summary: str
     risks: tuple[str, ...]
     tasks: tuple[dict, ...]
+
+
+@dataclass(frozen=True)
+class GeneratedPractice:
+    question_ids: tuple[int, ...]
+    request: str
 
 
 PROMPT = ChatPromptTemplate.from_messages([
@@ -49,6 +62,8 @@ PROMPT = ChatPromptTemplate.from_messages([
 resources=资料问答，practice=题库和 AI 出题/练习，plan=学习计划，analytics=学习分析和报告，
 review=错题复习，courses=课程管理，agent=本窗口。
 如果用户明确要求执行一个 available_tools 中的操作，action 使用 tool，填写 tool_name 和 tool_arguments。
+如果用户要求生成题目、练习题或测试题，action 使用 generate_questions，填写 question_request、
+question_count、question_difficulty 和 course_id；生成后应用会把题目交给练习中心。
 修改数据的工具必须等待用户确认；不要声称已经执行未确认的操作。
 回复简短、具体，避免声称已经完成尚未执行的操作。
 """.strip()),
@@ -73,14 +88,17 @@ class LearningPlanAgentService:
         chat_model: BaseChatModel,
         plan_factory: Callable[[], PlanGenerationService],
         tool_registry: ToolRegistry | None = None,
+        question_factory: Callable[[], QuestionGenerationService] | None = None,
     ) -> None:
         self.database = database
         self.model = chat_model.with_structured_output(AgentDecision)
         self.plan_factory = plan_factory
         self.tool_registry = tool_registry
+        self.question_factory = question_factory
 
     def context(self) -> dict:
         with self.database.session() as session:
+            courses = list(session.scalars(select(Course).where(Course.status == "active")))
             goals = list(session.scalars(select(StudyGoal).where(StudyGoal.status == "active")))
             weak_points = list(session.scalars(
                 select(KnowledgePoint).order_by(KnowledgePoint.mastery.asc()).limit(8)
@@ -99,6 +117,7 @@ class LearningPlanAgentService:
                  "progress": item.progress}
                 for item in goals
             ],
+            "courses": [{"id": item.id, "name": item.name} for item in courses],
             "weak_points": [
                 {"id": item.id, "name": item.name, "mastery": item.mastery,
                  "course_id": item.course_id}
@@ -132,6 +151,9 @@ class LearningPlanAgentService:
         ):
             decision.action = "chat"
             decision.reply = "我暂时无法找到对应的项目操作。"
+        if decision.action == "generate_questions" and self.question_factory is None:
+            decision.action = "chat"
+            decision.reply = "题目生成服务尚未配置。"
         if decision.action == "generate_plan" and decision.goal_id is None:
             goals = self.context()["active_goals"]
             if len(goals) == 1:
@@ -142,12 +164,46 @@ class LearningPlanAgentService:
             else:
                 decision.action = "chat"
                 decision.reply = "你有多个进行中的目标，请告诉我想为哪个目标制定计划。"
+        if decision.action == "generate_questions" and decision.course_id is None:
+            courses = self.context()["courses"]
+            if len(courses) == 1:
+                decision.course_id = courses[0]["id"]
+            elif not courses:
+                decision.action = "chat"
+                decision.reply = "当前没有课程，请先创建课程后再生成题目。"
+            else:
+                decision.action = "chat"
+                decision.reply = "请告诉我为哪门课程生成题目。"
         return decision
 
     def execute_tool(self, name: str, arguments: dict, *, confirmed: bool = False) -> dict:
         if self.tool_registry is None:
             raise ValueError("通用工具未初始化")
         return self.tool_registry.execute(name, arguments, confirmed=confirmed)
+
+    def generate_questions(
+        self,
+        *,
+        course_id: int,
+        request: str,
+        count: int,
+        difficulty: int,
+    ) -> GeneratedPractice:
+        if self.question_factory is None:
+            raise ValueError("题目生成服务未初始化")
+        result = self.question_factory().generate(
+            request,
+            course_id=course_id,
+            count=count,
+            kinds=["单选", "判断", "填空", "简答"],
+            difficulty=difficulty,
+            resource_ids=None,
+        )
+        draft_service = QuestionDraftService(self.database)
+        question_ids = tuple(draft_service.accept(draft_id) for draft_id in result.draft_ids)
+        if not question_ids:
+            raise ValueError("没有生成可练习的题目")
+        return GeneratedPractice(question_ids=question_ids, request=request)
 
     def generate_plan(self, *, goal_id: int, daily_minutes: int) -> PlanPreview:
         draft_id = self.plan_factory().generate(
