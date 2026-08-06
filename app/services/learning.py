@@ -7,6 +7,7 @@ from sqlalchemy import select
 from app.database import Database
 from app.repositories.learning import CourseRepository, GoalRepository, StatsRepository, TaskRepository
 from app.models import Course, KnowledgePoint, StudySession, StudyTask
+from app.services.course_progress import CourseProgressService
 
 
 class LearningService:
@@ -143,7 +144,13 @@ class LearningService:
 
     def complete_task(self, task_id: int) -> None:
         with self.database.session() as session:
+            task = TaskRepository(session).get(task_id)
+            if task is None:
+                raise ValueError("Task does not exist")
+            course_id = task.course_id
             TaskRepository(session).complete(task_id)
+        if course_id is not None:
+            CourseProgressService(self.database).refresh(course_id)
 
     def list_goals(self) -> list[object]:
         with self.database.session() as session:

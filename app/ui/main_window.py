@@ -17,13 +17,15 @@ from ai.factory import (
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QApplication, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QStackedWidget,
-    QVBoxLayout, QWidget,
+    QVBoxLayout, QWidget, QTabWidget,
 )
 
 from app.core.config import AppSettings
 from app.services.learning import LearningService
+from app.services.agent_sessions import AgentSessionService
+from app.services.agent_workflows import AgentWorkflowService
 from app.services.domain import (
     AnalyticsService, JobService, MaintenanceService, QuestionService, ResourceService, ReviewService,
 )
@@ -32,7 +34,7 @@ from app.ui.advanced_pages import AnalyticsPage, PracticePage, ResourcesPage, Re
 from app.ui.pages import CoursesPage, DashboardPage, PlanPage, SettingsPage
 from app.ui.icons import IconProvider
 from app.tools.registry import ToolRegistry
-from app.ui.styles.theme import DARK, LIGHT
+from app.ui.styles.theme import DARK, LIGHT, TOKENS
 from app.ui.learning_agent_page import LearningAgentPage
 
 
@@ -46,6 +48,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1100, 700)
         self.resize(self.preferences.value("size", QSize(1440, 900)))
         self._nav_buttons: list[QPushButton] = []
+        self._nav_button_labels: list[str] = []
         self._agent_session_count = 1
         self.resources = ResourceService(service.database, config)
         self.questions = QuestionService(service.database)
@@ -53,6 +56,7 @@ class MainWindow(QMainWindow):
         self.analytics = AnalyticsService(service.database)
         self.maintenance = MaintenanceService(service.database, config)
         self.tool_registry = ToolRegistry(service.database, config)
+        self.agent_sessions = AgentSessionService(service.database)
         self.jobs = JobService(service.database)
         self.jobs.recover_interrupted()
         self._build_ui()
@@ -61,7 +65,9 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geometry)
             if not any(self.frameGeometry().intersects(screen.availableGeometry()) for screen in QApplication.screens()):
                 self.move(QApplication.primaryScreen().availableGeometry().center() - self.rect().center())
-        self.sidebar.setVisible(not self.preferences.value("nav_collapsed", False, type=bool))
+        self.set_navigation_compact(
+            self.preferences.value("nav_collapsed", False, type=bool)
+        )
         self.apply_theme(str(self.preferences.value("theme", "light")))
         last_page = int(self.preferences.value("page", 0))
         self.navigate(max(0, min(last_page, self.stack.count() - 1)))
@@ -73,15 +79,17 @@ class MainWindow(QMainWindow):
         outer.setSpacing(0)
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidebar")
-        self.sidebar.setFixedWidth(230)
+        self.sidebar.setFixedWidth(TOKENS["sidebar_expanded"])
         nav = QVBoxLayout(self.sidebar)
         self._nav_layout = nav
         nav.setContentsMargins(14, 18, 14, 16)
         brand = QLabel("个性化学习助手")
         brand.setObjectName("brand")
+        self.brand = brand
         nav.addWidget(brand)
         mode = QLabel("● 本地模式")
         mode.setProperty("muted", True)
+        self.mode = mode
         nav.addWidget(mode)
         nav.addSpacing(16)
 
@@ -121,6 +129,10 @@ class MainWindow(QMainWindow):
         notifications.setToolTip("查看到期复习和后台任务")
         notifications.clicked.connect(self.show_notifications)
         top_layout.addWidget(notifications)
+        sessions_button = QPushButton("会话")
+        sessions_button.setToolTip("搜索、归档或恢复 Agent 会话")
+        sessions_button.clicked.connect(self.manage_agent_sessions)
+        top_layout.addWidget(sessions_button)
         theme = QPushButton("切换主题")
         theme.setIcon(IconProvider.get("settings"))
         theme.setToolTip("在浅色与深色主题之间切换")
@@ -191,6 +203,10 @@ class MainWindow(QMainWindow):
             ),
         )
         analytics_page.jobs_changed.connect(self.update_status)
+        sessions = self.agent_sessions.list_sessions()
+        if not sessions:
+            sessions = [self.agent_sessions.create_session("Agent 1")]
+        primary_session = sessions[0]
         agent_page = LearningAgentPage(
             jobs=self.jobs,
             agent_factory=lambda: create_learning_plan_agent_service(
@@ -198,16 +214,53 @@ class MainWindow(QMainWindow):
                 app_settings=self.config,
                 tool_registry=self.tool_registry,
             ),
+            session_service=self.agent_sessions,
+            session_id=primary_session.id,
+            workflow_factory=lambda: AgentWorkflowService(
+                database=self.service.database,
+                indexing_factory=lambda: create_resource_indexing_pipeline(
+                    database=self.service.database, app_settings=self.config
+                ),
+                extraction_factory=lambda: create_knowledge_extraction_service(
+                    database=self.service.database, app_settings=self.config
+                ),
+                question_factory=lambda: create_question_generation_service(
+                    database=self.service.database, app_settings=self.config
+                ),
+                report_factory=lambda: create_learning_report_service(
+                    database=self.service.database, app_settings=self.config
+                ),
+            ),
         )
         agent_page.navigate_requested.connect(
             lambda route: self._route_from_agent(route, agent_page, practice_page, analytics_page)
         )
         agent_page.practice_requested.connect(
-            lambda question_ids: self._open_agent_practice(practice_page, question_ids)
+            lambda question_ids: self._open_agent_practice(agent_page, practice_page, question_ids)
+        )
+        agent_page.workflow_practice_requested.connect(
+            lambda workflow_id, question_ids: self._open_workflow_practice(
+                agent_page, workflow_id, practice_page, question_ids
+            )
         )
         agent_page.new_window_requested.connect(
             lambda: self._open_agent_window(practice_page, analytics_page)
         )
+        agent_page.session_title_changed.connect(self._update_agent_session_title)
+        agent_page.knowledge_review_requested.connect(
+            lambda course_id: self._open_knowledge_drafts(practice_page, course_id)
+        )
+        self.agent_tabs = QTabWidget()
+        self.agent_tabs.setDocumentMode(True)
+        self.agent_tabs.setTabsClosable(True)
+        self.agent_tabs.tabCloseRequested.connect(self.close_agent_tab)
+        new_tab_button = QPushButton("+")
+        new_tab_button.setToolTip("新建 Agent 会话")
+        new_tab_button.clicked.connect(
+            lambda: self._open_agent_window(practice_page, analytics_page)
+        )
+        self.agent_tabs.setCornerWidget(new_tab_button, Qt.TopRightCorner)
+        self.agent_tabs.addTab(agent_page, primary_session.title)
         self.resources_page.knowledge_drafts_ready.connect(
             lambda course_id: self._open_knowledge_drafts(practice_page, course_id)
         )
@@ -229,7 +282,7 @@ class MainWindow(QMainWindow):
             ("练习中心", practice_page),
             ("错题与复习", ReviewPage(self.reviews)),
             ("学习分析", analytics_page),
-            ("学习 Agent", agent_page),
+            ("AI 中心", self.agent_tabs),
             ("工具中心", ToolsPage(self.tool_registry)),
             ("后台任务", jobs_page),
             ("日志查看器", LogsPage(self.config.log_dir / "app.log")),
@@ -240,9 +293,14 @@ class MainWindow(QMainWindow):
             button = QPushButton(name)
             button.setCheckable(True)
             button.setMinimumHeight(38)
+            button.setIcon(IconProvider.get("folder"))
+            button.setToolTip(name)
             button.clicked.connect(lambda _=False, i=index: self.navigate(i))
             nav.addWidget(button)
             self._nav_buttons.append(button)
+            self._nav_button_labels.append(name)
+        for session in sessions[1:]:
+            self._open_agent_session(session.id, session.title, practice_page, analytics_page)
         nav.addStretch()
         nav.addWidget(QLabel(f"v{self.config.version}  ·  数据库已连接"))
         outer.addWidget(self.sidebar)
@@ -281,6 +339,63 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "通知", f"到期复习：{stats['due']} 项\n正在处理的后台任务：{active} 项"
         )
+
+    def manage_agent_sessions(self) -> None:
+        """提供会话检索、归档和恢复，不直接删除学习记录。"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Agent 会话管理")
+        dialog.resize(520, 420)
+        layout = QVBoxLayout(dialog)
+        query = QLineEdit()
+        query.setPlaceholderText("搜索会话")
+        include_archived = QCheckBox("显示已归档会话")
+        sessions = QListWidget()
+        archive_button = QPushButton("归档")
+        restore_button = QPushButton("恢复")
+        close_button = QPushButton("关闭")
+
+        def refresh() -> None:
+            sessions.clear()
+            for item in self.agent_sessions.search_sessions(
+                query.text(), include_archived=include_archived.isChecked()
+            ):
+                label = f"[已归档] {item.title}" if item.archived else item.title
+                row = QListWidgetItem(label)
+                row.setData(Qt.UserRole, {"id": item.id, "archived": item.archived})
+                sessions.addItem(row)
+
+        def selected() -> dict | None:
+            item = sessions.currentItem()
+            return item.data(Qt.UserRole) if item else None
+
+        def archive() -> None:
+            value = selected()
+            if value and not value["archived"]:
+                self.agent_sessions.archive(value["id"])
+                refresh()
+
+        def restore() -> None:
+            value = selected()
+            if value and value["archived"]:
+                self.agent_sessions.restore(value["id"])
+                refresh()
+
+        query.textChanged.connect(refresh)
+        include_archived.toggled.connect(refresh)
+        archive_button.clicked.connect(archive)
+        restore_button.clicked.connect(restore)
+        close_button.clicked.connect(dialog.accept)
+        actions = QHBoxLayout()
+        actions.addWidget(archive_button)
+        actions.addWidget(restore_button)
+        actions.addStretch()
+        actions.addWidget(close_button)
+        layout.addWidget(query)
+        layout.addWidget(include_archived)
+        layout.addWidget(sessions, 1)
+        layout.addLayout(actions)
+        refresh()
+        dialog.exec()
 
     def retry_job(self, job_id: int) -> None:
         from pathlib import Path
@@ -364,14 +479,32 @@ class MainWindow(QMainWindow):
             analytics_page.open_today_report()
 
     def _open_agent_practice(
-        self, practice_page: PracticePage, question_ids: list[int] | tuple[int, ...]
+        self, agent_page: LearningAgentPage, practice_page: PracticePage,
+        question_ids: list[int] | tuple[int, ...]
     ) -> None:
         self.navigate(4)
         practice_page.tabs.setCurrentIndex(0)
-        practice_page.start_practice_for_questions(question_ids)
+        if practice_page.start_practice_for_questions(question_ids):
+            agent_page.generate_report_after_practice()
+
+    def _open_workflow_practice(
+        self, agent_page: LearningAgentPage, workflow_id: int,
+        practice_page: PracticePage, question_ids: list[int] | tuple[int, ...],
+    ) -> None:
+        self.navigate(4)
+        practice_page.tabs.setCurrentIndex(0)
+        if practice_page.start_practice_for_questions(question_ids):
+            agent_page.finish_workflow_practice(workflow_id)
 
     def _open_agent_window(
         self, practice_page: PracticePage, analytics_page: AnalyticsPage
+    ) -> None:
+        session = self.agent_sessions.create_session(f"Agent {self._agent_session_count + 1}")
+        self._open_agent_session(session.id, session.title, practice_page, analytics_page, activate=True)
+
+    def _open_agent_session(
+        self, session_id: int, title: str, practice_page: PracticePage,
+        analytics_page: AnalyticsPage, *, activate: bool = False,
     ) -> None:
         page = LearningAgentPage(
             jobs=self.jobs,
@@ -380,34 +513,82 @@ class MainWindow(QMainWindow):
                 app_settings=self.config,
                 tool_registry=self.tool_registry,
             ),
+            session_service=self.agent_sessions,
+            session_id=session_id,
+            workflow_factory=lambda: AgentWorkflowService(
+                database=self.service.database,
+                indexing_factory=lambda: create_resource_indexing_pipeline(
+                    database=self.service.database, app_settings=self.config
+                ),
+                extraction_factory=lambda: create_knowledge_extraction_service(
+                    database=self.service.database, app_settings=self.config
+                ),
+                question_factory=lambda: create_question_generation_service(
+                    database=self.service.database, app_settings=self.config
+                ),
+                report_factory=lambda: create_learning_report_service(
+                    database=self.service.database, app_settings=self.config
+                ),
+            ),
         )
         page.navigate_requested.connect(
             lambda route: self._route_from_agent(route, page, practice_page, analytics_page)
         )
         page.practice_requested.connect(
-            lambda question_ids: self._open_agent_practice(practice_page, question_ids)
+            lambda question_ids: self._open_agent_practice(page, practice_page, question_ids)
+        )
+        page.workflow_practice_requested.connect(
+            lambda workflow_id, question_ids: self._open_workflow_practice(
+                page, workflow_id, practice_page, question_ids
+            )
+        )
+        page.knowledge_review_requested.connect(
+            lambda course_id: self._open_knowledge_drafts(practice_page, course_id)
         )
         page.new_window_requested.connect(
             lambda: self._open_agent_window(practice_page, analytics_page)
         )
-        index = self.stack.addWidget(page)
+        page.session_title_changed.connect(self._update_agent_session_title)
         self._agent_session_count += 1
-        button = QPushButton(f"Agent {self._agent_session_count}")
-        button.setCheckable(True)
-        button.setMinimumHeight(38)
-        button.clicked.connect(lambda: self.navigate(self.stack.indexOf(page)))
-        self._nav_layout.insertWidget(self._nav_layout.count() - 2, button)
-        self._nav_buttons.append(button)
-        self.navigate(index)
+        index = self.agent_tabs.addTab(page, title)
+        if activate:
+            self.navigate(7)
+            self.agent_tabs.setCurrentIndex(index)
+
+    def _update_agent_session_title(self, session_id: int, title: str) -> None:
+        for index in range(self.agent_tabs.count()):
+            page = self.agent_tabs.widget(index)
+            if isinstance(page, LearningAgentPage) and page.session_id == session_id:
+                self.agent_tabs.setTabText(index, title)
+                return
+
+    def close_agent_tab(self, index: int) -> None:
+        """关闭会话视图但保留持久化记录，便于下次恢复。"""
+        if self.agent_tabs.count() == 1:
+            return
+        page = self.agent_tabs.widget(index)
+        self.agent_tabs.removeTab(index)
+        page.deleteLater()
 
     def toggle_theme(self) -> None:
         current = str(self.preferences.value("theme", "light"))
         self.apply_theme("dark" if current == "light" else "light")
 
     def toggle_navigation(self) -> None:
-        visible = not self.sidebar.isVisible()
-        self.sidebar.setVisible(visible)
-        self.preferences.setValue("nav_collapsed", not visible)
+        self.set_navigation_compact(not bool(self.sidebar.property("compact")))
+
+    def set_navigation_compact(self, compact: bool) -> None:
+        """在完整导航与保留入口的图标紧凑模式之间切换。"""
+        self.sidebar.setProperty("compact", compact)
+        self.sidebar.setFixedWidth(
+            TOKENS["sidebar_compact"] if compact else TOKENS["sidebar_expanded"]
+        )
+        self.brand.setVisible(not compact)
+        self.mode.setVisible(not compact)
+        for button, label in zip(self._nav_buttons, self._nav_button_labels):
+            button.setText("" if compact else label)
+            button.setToolTip(label)
+        self.preferences.setValue("nav_collapsed", compact)
 
     def apply_theme(self, theme: str) -> None:
         QApplication.instance().setStyleSheet(DARK if theme == "dark" else LIGHT)

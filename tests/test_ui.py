@@ -1,6 +1,8 @@
 from app.core.config import AppSettings
 from app.database import Database
 from app.services.learning import LearningService
+from PySide6.QtCore import QUrl
+from app.ui.agent_components import AgentChatView
 from app.ui.main_window import CommandPalette, MainWindow
 from app.ui.practice_page import render_math_text
 
@@ -22,9 +24,10 @@ def test_main_window_and_navigation(qtbot, tmp_path):
     assert analytics_page.tabs.tabText(6) == "AI 报告"
     assert window.stack.widget(7).windowTitle() == ""
     window._open_agent_window(practice_page, analytics_page)
-    assert window.stack.count() == 13
-    assert window.stack.currentIndex() == 12
-    assert window._nav_buttons[-1].text() == "Agent 2"
+    assert window.stack.count() == 12
+    assert window.stack.currentIndex() == 7
+    assert window.agent_tabs.count() == 2
+    assert window.agent_tabs.tabText(1) == "Agent 2"
     window.navigate(3)
     assert window.stack.currentIndex() == 3
 
@@ -54,3 +57,18 @@ def test_command_palette_searches_and_navigates(qtbot, tmp_path):
 def test_render_math_text_converts_common_latex():
     rendered = render_math_text(r"\(\int_0^{n\pi}\sqrt{1+\sin 2x}\,dx\)")
     assert rendered == "∫[0, nπ]√(1+sin 2x) dx"
+
+
+def test_agent_chat_does_not_navigate_when_a_report_link_is_clicked(qtbot):
+    chat = AgentChatView()
+    qtbot.addWidget(chat)
+    assert chat.openLinks() is False
+    assert chat.openExternalLinks() is False
+
+
+def test_agent_chat_ignores_report_urls_as_document_sources(qtbot):
+    chat = AgentChatView()
+    qtbot.addWidget(chat)
+    chat.setPlainText("existing conversation")
+    chat.doSetSource(QUrl("report://download/8"))
+    assert chat.toPlainText() == "existing conversation"

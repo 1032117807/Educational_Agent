@@ -33,6 +33,7 @@ from app.models import (
     StudyTask,
     ToolCallLog,
 )
+from app.services.course_progress import CourseProgressService
 
 
 class QuestionService:
@@ -111,6 +112,37 @@ class QuestionService:
             session.add(item)
             session.flush()
             return item
+
+    def delete_knowledge(self, knowledge_id: int) -> None:
+        """删除知识点并解除题目关联，避免留下失效外键。"""
+        with self.database.session() as session:
+            item = session.get(KnowledgePoint, knowledge_id)
+            if item is None:
+                raise ValueError("Knowledge point does not exist")
+            for question in session.scalars(
+                select(Question).where(Question.knowledge_point_id == knowledge_id)
+            ):
+                question.knowledge_point_id = None
+            session.delete(item)
+
+    def merge_knowledge(self, source_id: int, target_id: int) -> KnowledgePoint:
+        """合并重复知识点，将关联题目迁移到保留目标。"""
+        if source_id == target_id:
+            raise ValueError("Source and target knowledge points must differ")
+        with self.database.session() as session:
+            source = session.get(KnowledgePoint, source_id)
+            target = session.get(KnowledgePoint, target_id)
+            if source is None or target is None:
+                raise ValueError("Knowledge point does not exist")
+            if source.course_id != target.course_id:
+                raise ValueError("Only knowledge points in the same course can be merged")
+            for question in session.scalars(
+                select(Question).where(Question.knowledge_point_id == source_id)
+            ):
+                question.knowledge_point_id = target_id
+            session.delete(source)
+            session.flush()
+            return target
 
     def archive(self, question_id: int) -> None:
         with self.database.session() as session:
@@ -225,9 +257,11 @@ class QuestionService:
             return link.marked
 
     def submit(self, session_id: int, question_id: int, response: str, elapsed: int = 0, self_grade: bool | None = None) -> bool | None:
+        course_id = None
         with self.database.session() as session:
             practice = session.get(PracticeSession, session_id)
             question = session.get(Question, question_id)
+            course_id = practice.course_id if practice else None
             if not practice or not question:
                 raise ValueError("练习或题目不存在")
             correct = self_grade if question.kind == "简答" else self.grade(question.kind, question.answer, response)
@@ -259,7 +293,11 @@ class QuestionService:
                     target = 100 if correct else 0
                     knowledge.mastery = round(knowledge.mastery * 0.8 + target * 0.2)
             session.flush()
-            return correct
+            result = correct
+
+        if course_id is not None:
+            CourseProgressService(self.database).refresh(course_id)
+        return result
 
     def get_attempt_id(self, session_id: int, question_id: int) -> int | None:
         with self.database.session() as session:
@@ -270,17 +308,31 @@ class QuestionService:
             return attempt.id if attempt else None
 
     def finish(self, session_id: int, duration_seconds: int) -> PracticeSession:
+        course_id = None
         with self.database.session() as session:
             practice = session.get(PracticeSession, session_id)
             if not practice:
                 raise ValueError("练习不存在")
+            course_id = practice.course_id
             attempts = list(session.scalars(select(QuestionAttempt).where(QuestionAttempt.session_id == session_id)))
+            # Closing the practice must grade saved objective answers too.
+            # Users should not have to click "submit" separately for every item.
+            for attempt in attempts:
+                if attempt.correct is not None or not attempt.response.strip():
+                    continue
+                question = session.get(Question, attempt.question_id)
+                if question is None or question.kind == "简答":
+                    continue
+                attempt.correct = self.grade(question.kind, question.answer, attempt.response)
             practice.correct = sum(1 for item in attempts if item.correct)
             practice.duration_seconds = max(0, duration_seconds)
             practice.finished_at = datetime.now()
             practice.status = "completed"
             session.flush()
-            return practice
+            result = practice
+        if course_id is not None:
+            CourseProgressService(self.database).refresh(course_id)
+        return result
 
     def list_sessions(self) -> list[PracticeSession]:
         with self.database.session() as session:

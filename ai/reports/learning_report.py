@@ -32,6 +32,9 @@ class LearningStats:
     accuracy: float
     weak_points: tuple[dict, ...]
     error_types: dict[str, int]
+    task_evidence: tuple[dict, ...] = ()
+    practice_evidence: tuple[dict, ...] = ()
+    progress_formula: str = "knowledge 45% + tasks 20% + accuracy 25% + consistency 10%"
 
 
 class ReportExplanation(BaseModel):
@@ -64,7 +67,7 @@ def render_learning_report(report: LearningReport) -> str:
     def format_list(items: list[str]) -> str:
         return "\n".join(f"- {item}" for item in items) if items else "- 暂无"
 
-    return "\n".join([
+    return ("\n".join([
         "# AI 学习报告",
         f"周期：{stats.start_date} 至 {stats.end_date}",
         "",
@@ -87,7 +90,14 @@ def render_learning_report(report: LearningReport) -> str:
         "",
         "## 下周重点",
         format_list(explanation.next_week_priorities),
-    ])
+    ]) + "\n\n## Data basis\n"
+        f"- Objective progress formula: {stats.progress_formula}\n"
+        "- Knowledge points used:\n"
+        + format_list([f"{item['name']} ({item['mastery']}%)" for item in stats.weak_points])
+        + "\n- Tasks counted:\n"
+        + format_list([f"{item['title']} ({item['status']})" for item in stats.task_evidence])
+        + "\n- Practice attempts counted:\n"
+        + format_list([f"question {item['question_id']}: {item['result']}" for item in stats.practice_evidence]))
 
 
 PROMPT = ChatPromptTemplate.from_messages([
@@ -142,6 +152,15 @@ class LearningReportService:
             accuracy=correct / len(judged) if judged else 0.0,
             weak_points=tuple({"id": p.id, "name": p.name, "mastery": p.mastery} for p in points),
             error_types=errors,
+            task_evidence=tuple({
+                "title": item.title,
+                "status": "completed" if item.completed else "incomplete",
+                "date": item.planned_date.isoformat(),
+            } for item in tasks),
+            practice_evidence=tuple({
+                "question_id": item.question_id,
+                "result": "correct" if item.correct else "incorrect",
+            } for item in judged),
         )
 
     def generate(self, *, start_date: date, end_date: date) -> LearningReport:

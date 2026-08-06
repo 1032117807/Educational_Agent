@@ -32,7 +32,11 @@ from ai.retrieval import (
 
 from ai.chains import GroundedQAService, KnowledgeExtractionService
 from ai.gateways import create_chat_model
-from ai.agents import LearningPlanAgentService
+
+from ai.agents import LearningOrchestrator, LearningPlanAgentService
+
+from app.services.agent_permissions import AgentPermissionService
+from app.services.mcp_gateway import MCPGateway
 
 def create_resource_indexing_pipeline(
     *,
@@ -254,6 +258,19 @@ def create_plan_generation_service(*, database: Database, app_settings: AppSetti
         model_name=ai_settings.chat_model,
     )
 
+def create_learning_orchestrator(
+    *,
+    database: Database,
+    app_settings: AppSettings,
+) -> LearningOrchestrator:
+    return LearningOrchestrator(
+        database=database,
+        indexing_factory=lambda: create_resource_indexing_pipeline(database=database, app_settings=app_settings),
+        extraction_factory=lambda: create_knowledge_extraction_service(database=database, app_settings=app_settings),
+        question_factory=lambda: create_question_generation_service(database=database, app_settings=app_settings),
+        report_factory=lambda: create_learning_report_service(database=database, app_settings=app_settings),
+        plan_factory=lambda: create_plan_generation_service(database=database, app_settings=app_settings),
+    )
 
 def create_learning_plan_agent_service(*, database: Database, app_settings: AppSettings, tool_registry=None) -> LearningPlanAgentService:
     ai_settings = get_ai_settings()
@@ -267,5 +284,9 @@ def create_learning_plan_agent_service(*, database: Database, app_settings: AppS
         question_factory=lambda: create_question_generation_service(
             database=database, app_settings=app_settings
         ),
+        report_factory=lambda: create_learning_report_service(
+            database=database, app_settings=app_settings
+        ),
+        mcp_gateway=MCPGateway(AgentPermissionService(app_settings.data_dir / "mcp_policy.json")),
     )
   

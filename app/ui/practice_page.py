@@ -36,6 +36,7 @@ from ai.chains import (
 from ai.retrieval import KnowledgePointIndex
 from app.ui.knowledge_extraction_widget import KnowledgeExtractionWidget
 from app.ui.question_generation_widget import QuestionGenerationWidget
+from app.ui.math_renderer import MathChoice, MathTextView
 
 
 def _selected_id(table: QTableWidget) -> int | None:
@@ -295,15 +296,14 @@ class PracticeDialog(QDialog):
         self.responses: dict[int, str] = service.saved_responses(self.practice.id)
         root = QVBoxLayout(self)
         self.progress = QLabel()
-        self.prompt = QLabel()
-        self.prompt.setWordWrap(True)
-        self.prompt.setStyleSheet("font-size: 18px; font-weight: 600; padding: 16px;")
+        self.prompt = MathTextView(parent=self)
+        self.prompt.setMinimumHeight(72)
         self.response = QTextEdit()
         self.response.setPlaceholderText("输入答案；多选答案用英文逗号分隔")
         self.choice_area = QWidget()
         self.choice_layout = QVBoxLayout(self.choice_area)
         self.choice_layout.setContentsMargins(0, 0, 0, 0)
-        self.choice_buttons: list[QCheckBox | QRadioButton] = []
+        self.choice_buttons: list[MathChoice] = []
         self.choice_group = QButtonGroup(self)
         self.feedback = QLabel()
         self.feedback.setWordWrap(True)
@@ -338,7 +338,8 @@ class PracticeDialog(QDialog):
     def show_question(self) -> None:
         question = self.questions[self.index]
         self.progress.setText(f"第 {self.index + 1} / {len(self.questions)} 题 · {question.kind} · 难度 {question.difficulty}")
-        self.prompt.setText(render_math_text(question.prompt))
+        self.prompt.fallback.setText(render_math_text(question.prompt))
+        self.prompt.set_math_text(question.prompt)
         self._render_choices(question)
         if self.choice_buttons:
             self.response.clear()
@@ -363,12 +364,14 @@ class PracticeDialog(QDialog):
         for line in lines:
             match = re.match(r"\s*([A-Za-z])(?:[.、:：)|）])\s*(.*)", line)
             value = match.group(1).upper() if match else line
-            label = render_math_text(line)
-            button = QCheckBox(label) if question.kind == "多选" else QRadioButton(label)
-            button.setProperty("answer_value", value)
-            button.setChecked(value.casefold() in selected)
-            if isinstance(button, QRadioButton):
-                self.choice_group.addButton(button)
+            button = MathChoice(
+                line, multiple=question.kind == "多选",
+                fallback_text=render_math_text(line), parent=self.choice_area,
+            )
+            button.control.setProperty("answer_value", value)
+            button.control.setChecked(value.casefold() in selected)
+            if isinstance(button.control, QRadioButton):
+                self.choice_group.addButton(button.control)
             self.choice_buttons.append(button)
             self.choice_layout.addWidget(button)
 
@@ -376,8 +379,8 @@ class PracticeDialog(QDialog):
         if not self.choice_buttons:
             return self.response.toPlainText()
         return ",".join(
-            str(button.property("answer_value"))
-            for button in self.choice_buttons if button.isChecked()
+            str(button.control.property("answer_value"))
+            for button in self.choice_buttons if button.control.isChecked()
         )
 
     def submit(self) -> None:
@@ -563,10 +566,19 @@ class PracticePage(QWidget):
         self.knowledge_mastery.setSuffix("%")
         add_knowledge = QPushButton("添加知识点")
         add_knowledge.clicked.connect(self.create_knowledge)
+        edit_knowledge = QPushButton("编辑")
+        edit_knowledge.clicked.connect(self.edit_knowledge)
+        merge_knowledge = QPushButton("合并")
+        merge_knowledge.clicked.connect(self.merge_knowledge)
+        delete_knowledge = QPushButton("删除")
+        delete_knowledge.clicked.connect(self.delete_knowledge)
         knowledge_bar.addWidget(self.knowledge_course)
         knowledge_bar.addWidget(self.knowledge_name, 1)
         knowledge_bar.addWidget(self.knowledge_mastery)
         knowledge_bar.addWidget(add_knowledge)
+        knowledge_bar.addWidget(edit_knowledge)
+        knowledge_bar.addWidget(merge_knowledge)
+        knowledge_bar.addWidget(delete_knowledge)
         self.knowledge_table = QTableWidget(0, 3)
         self.knowledge_table.setHorizontalHeaderLabels(["课程", "知识点", "掌握度"])
         self.knowledge_table.horizontalHeader().setStretchLastSection(True)
@@ -637,7 +649,9 @@ class PracticePage(QWidget):
             for column, text in enumerate((
                 courses.get(item.course_id, "未知课程"), item.name, f"{item.mastery}%"
             )):
-                self.knowledge_table.setItem(row, column, QTableWidgetItem(text))
+                cell = QTableWidgetItem(text)
+                cell.setData(Qt.UserRole, item.id)
+                self.knowledge_table.setItem(row, column, cell)
         if self.knowledge_extraction_widget is not None:
             self.knowledge_extraction_widget.refresh_scopes()
         if self.question_generation_widget is not None:
@@ -660,12 +674,12 @@ class PracticePage(QWidget):
     def start_practice_for_question(self, question_id: int) -> None:
         self.start_practice_for_questions([question_id])
 
-    def start_practice_for_questions(self, question_ids: list[int] | tuple[int, ...]) -> None:
+    def start_practice_for_questions(self, question_ids: list[int] | tuple[int, ...]) -> bool:
         try:
             prepared = self.service.create_practice_for_questions(list(question_ids))
         except ValueError as exc:
             QMessageBox.warning(self, "无法开始练习", str(exc))
-            return
+            return False
         dialog = PracticeDialog(
             self.service,
             self,
@@ -674,9 +688,12 @@ class PracticePage(QWidget):
             grading_factory=self.grading_factory,
             analysis_factory=self.analysis_factory,
         )
+        completed = [False]
+        dialog.completed.connect(lambda: completed.__setitem__(0, True))
         dialog.completed.connect(self.report_requested.emit)
         dialog.exec()
         self.refresh()
+        return completed[0]
 
     def create(self) -> None:
         dialog = QuestionDialog(self.service, self)
@@ -823,11 +840,75 @@ class PracticePage(QWidget):
             QMessageBox.warning(self, "无法保存", str(error))
 
 
+    def _selected_knowledge(self):
+        row = self.knowledge_table.currentRow()
+        item = self.knowledge_table.item(row, 1) if row >= 0 else None
+        knowledge_id = item.data(Qt.UserRole) if item is not None else None
+        return next((point for point in self.service.list_knowledge() if point.id == knowledge_id), None)
+
+    def edit_knowledge(self) -> None:
+        point = self._selected_knowledge()
+        if point is None:
+            QMessageBox.information(self, "知识点", "请先选择一个知识点。")
+            return
+        name, accepted = QInputDialog.getText(self, "编辑知识点", "名称", text=point.name)
+        if not accepted or not name.strip():
+            return
+        mastery, accepted = QInputDialog.getInt(
+            self, "编辑掌握度", "掌握度", point.mastery, 0, 100
+        )
+        if not accepted:
+            return
+        self.service.save_knowledge(point.course_id, name, mastery, point.note, point.id)
+        self.refresh()
+
+    def delete_knowledge(self) -> None:
+        point = self._selected_knowledge()
+        if point is None:
+            QMessageBox.information(self, "知识点", "请先选择一个知识点。")
+            return
+        if QMessageBox.question(
+            self, "删除知识点", "删除后关联题目将变为未关联，是否继续？"
+        ) != QMessageBox.Yes:
+            return
+        self.service.delete_knowledge(point.id)
+        self.refresh()
+
+    def merge_knowledge(self) -> None:
+        source = self._selected_knowledge()
+        if source is None:
+            QMessageBox.information(self, "合并知识点", "请先选择要合并的知识点。")
+            return
+        candidates = [
+            point for point in self.service.list_knowledge(source.course_id)
+            if point.id != source.id
+        ]
+        if not candidates:
+            QMessageBox.information(self, "合并知识点", "该课程没有可合并的目标知识点。")
+            return
+        names = [point.name for point in candidates]
+        target_name, accepted = QInputDialog.getItem(
+            self, "合并知识点", "合并到", names, 0, False
+        )
+        if not accepted:
+            return
+        target = next(point for point in candidates if point.name == target_name)
+        if QMessageBox.question(
+            self, "确认合并", f"“{source.name}”的关联题目将迁移到“{target.name}”。"
+        ) != QMessageBox.Yes:
+            return
+        self.service.merge_knowledge(source.id, target.id)
+        self.refresh()
+
+
 class ResultDialog(QDialog):
     def __init__(self, service: QuestionService, practice: object, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("练习结果")
         self.resize(850, 520)
+        # Repair sessions created before objective auto-grading was added.
+        # finish() is idempotent and only fills missing objective results.
+        practice = service.finish(practice.id, practice.duration_seconds)
         root = QVBoxLayout(self)
         accuracy = practice.correct * 100 / practice.total if practice.total else 0
         heading = QLabel(f"得分：{practice.correct} / {practice.total}    正确率：{accuracy:.1f}%")

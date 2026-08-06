@@ -25,6 +25,7 @@ from app.tools.registry import ToolRegistry
 from app.ui.pages import page_title, stat_card
 from app.ui.icons import IconProvider
 from ai.reports import LearningReport, LearningReportService, render_learning_report
+from app.services.report_export import export_report
 
 
 def _selected_id(table: QTableWidget) -> int | None:
@@ -159,12 +160,16 @@ class AnalyticsPage(QWidget):
         self.report_export_button = QPushButton("导出 Markdown")
         self.report_export_button.setEnabled(False)
         self.report_export_button.clicked.connect(self.export_report_markdown)
+        self.report_export_all_button = QPushButton("Export PDF / Word / HTML")
+        self.report_export_all_button.setEnabled(False)
+        self.report_export_all_button.clicked.connect(self.export_report_file)
         controls.addWidget(QLabel("开始"))
         controls.addWidget(self.report_start)
         controls.addWidget(QLabel("结束"))
         controls.addWidget(self.report_end)
         controls.addWidget(self.report_button)
         controls.addWidget(self.report_export_button)
+        controls.addWidget(self.report_export_all_button)
         controls.addStretch()
         self.report_status = QLabel("就绪")
         controls.addWidget(self.report_status)
@@ -304,6 +309,7 @@ class AnalyticsPage(QWidget):
         self.current_report_markdown = render_learning_report(report)
         self.report_text.setMarkdown(self.current_report_markdown)
         self.report_export_button.setEnabled(True)
+        self.report_export_all_button.setEnabled(True)
         if self.report_factory is not None:
             try:
                 self.report_factory().save_snapshot(report, self.current_report_markdown)
@@ -336,6 +342,7 @@ class AnalyticsPage(QWidget):
         self.current_report_markdown = item.data(Qt.UserRole)
         self.report_text.setMarkdown(self.current_report_markdown)
         self.report_export_button.setEnabled(True)
+        self.report_export_all_button.setEnabled(True)
         self.report_status.setText("已打开历史报告")
 
     def export_report_markdown(self) -> None:
@@ -350,6 +357,22 @@ class AnalyticsPage(QWidget):
             Path(filename).write_text(self.current_report_markdown, encoding="utf-8")
         except OSError as exc:
             QMessageBox.warning(self, "导出失败", str(exc))
+
+    def export_report_file(self) -> None:
+        if not self.current_report_markdown:
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export AI learning report",
+            "learning-report.pdf",
+            "PDF (*.pdf);;Word document (*.docx);;HTML (*.html);;Markdown (*.md)",
+        )
+        if not filename:
+            return
+        try:
+            export_report(self.current_report_markdown, Path(filename))
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
 
     @staticmethod
     def _bar_chart(title: str, categories: list[str], values: list[int], series_name: str) -> QChart:

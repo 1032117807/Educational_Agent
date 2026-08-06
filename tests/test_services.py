@@ -2,6 +2,8 @@ from datetime import date
 from collections import Counter
 from datetime import timedelta
 
+from app.services.assessment import QuestionService
+
 
 def test_course_crud_and_search(service):
     course = service.create_course("线性代数", "大学", "数学")
@@ -61,4 +63,37 @@ def test_study_goal_update_and_archive(service):
     updated = service.get_goal(goal.id)
     assert updated.title == "期末数学" and updated.progress == 35
     service.archive_goal(goal.id)
+
+
+def test_knowledge_merge_moves_question_links_and_delete_clears_links(service):
+    course = service.create_course("知识点课程", "", "")
+    questions = QuestionService(service.database)
+    source = questions.save_knowledge(course.id, "极限")
+    target = questions.save_knowledge(course.id, "函数")
+    question = questions.save_question(
+        "题目", "A", course_id=course.id, knowledge_point_id=source.id
+    )
+
+    questions.merge_knowledge(source.id, target.id)
+    assert questions.get_question(question.id).knowledge_point_id == target.id
+
+    questions.delete_knowledge(target.id)
+    assert questions.get_question(question.id).knowledge_point_id is None
     assert service.list_goals() == []
+
+
+def test_finish_grades_saved_objective_answers(service):
+    course = service.create_course("自动判分课程", "", "")
+    questions = QuestionService(service.database)
+    question = questions.save_question(
+        "电路题", "A", "单选", course_id=course.id,
+        options="A. 正确\nB. 错误",
+    )
+    practice, _ = questions.create_practice_for_questions([question.id])
+    questions.save_draft(practice.id, question.id, "A")
+
+    result = questions.finish(practice.id, 0)
+
+    assert result.status == "completed"
+    assert result.correct == 1
+    assert questions.session_results(practice.id)[0]["correct"] is True

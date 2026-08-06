@@ -32,6 +32,11 @@ from app.models.ai_entities import (
     LearningPlanDraft,
     LearningPlanDraftTask,
     LearningReportSnapshot,
+    AgentHandoff,
+    AgentMessage,
+    AgentSession,
+    AgentToolCall,
+    AgentWorkflow,
 )
 
 __all__ = [
@@ -43,4 +48,6 @@ __all__ = [
     "StudyGoal", "StudySession", "StudyTask", "TaskRecurrence", "ToolCallLog", "QuestionDraftCitation",
     "SubjectiveGradingCitation", "SubjectiveGradingResult", "ErrorAnalysisResult",
     "LearningPlanDraft", "LearningPlanDraftTask", "LearningReportSnapshot",
+    "AgentHandoff", "AgentMessage", "AgentSession", "AgentToolCall",
+    "AgentWorkflow",
 ]

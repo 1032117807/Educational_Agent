@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -10,12 +12,13 @@ from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis, QDateT
 from PySide6.QtCore import QDateTime
 from PySide6.QtWidgets import (
     QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout,
-    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton,
+    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QCheckBox,
     QScrollArea, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget,
     QTextEdit, QVBoxLayout, QWidget,
 )
 
 from app.services.learning import LearningService
+from app.services.agent_permissions import AgentPermissionService, DEFAULT_POLICY
 
 
 from app.ui.components import page_title, stat_card
@@ -28,6 +31,7 @@ class SettingsPage(QWidget):
         self.config = config
         self.maintenance = maintenance
         self.learning = learning
+        self.mcp_permissions = AgentPermissionService(self.config.data_dir / "mcp_policy.json")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(28, 24, 28, 24)
         outer.addLayout(page_title("系统设置", "外观、本地数据与学习偏好"))
@@ -83,6 +87,30 @@ class SettingsPage(QWidget):
         form.addRow("AI 功能", QLabel("尚未启用（第一阶段保持完全本地）"))
         form.addRow("MCP 功能", QLabel("尚未启用"))
         root.addLayout(form)
+        self.mcp_checks: dict[str, QCheckBox] = {}
+        mcp_form = QFormLayout()
+        mcp_form.addRow(QLabel("MCP Agent permissions"))
+        current_policy = self.mcp_permissions.policy()
+        labels = {
+            "list_workspace_files": "Allow listing workspace files",
+            "read_workspace_file": "Allow reading workspace files",
+            "fetch_public_url": "Allow approved HTTPS sites",
+            "search_web": "Allow Brave web search",
+            "write_workspace_file": "Allow writing approved file types (confirmation required)",
+            "run_python_in_sandbox": "Allow Docker Python sandbox (confirmation required)",
+        }
+        for name in DEFAULT_POLICY:
+            check = QCheckBox(labels[name])
+            check.setChecked(current_policy[name][0])
+            self.mcp_checks[name] = check
+            mcp_form.addRow(check)
+        self.mcp_status = QLabel()
+        refresh_mcp = QPushButton("Refresh MCP status")
+        refresh_mcp.clicked.connect(self.refresh_mcp_status)
+        mcp_form.addRow("Runtime", self.mcp_status)
+        mcp_form.addRow(refresh_mcp)
+        root.addLayout(mcp_form)
+        self.refresh_mcp_status()
         actions = QGridLayout()
         save = QPushButton("保存设置")
         save.setProperty("primary", True)
@@ -135,7 +163,13 @@ class SettingsPage(QWidget):
         self.maintenance.set_setting("default_difficulty", str(difficulty))
         self.maintenance.set_setting("answer_feedback", immediate)
         self.maintenance.set_setting("density", compact)
+        self.mcp_permissions.save_policy({name: check.isChecked() for name, check in self.mcp_checks.items()})
         QMessageBox.information(self, "设置", "设置已保存。")
+
+    def refresh_mcp_status(self) -> None:
+        docker = "available" if shutil.which("docker") else "not installed"
+        brave = "configured" if os.getenv("BRAVE_SEARCH_API_KEY") else "not configured"
+        self.mcp_status.setText(f"Docker: {docker}; Brave Search: {brave}")
 
     def backup(self) -> None:
         filename, _ = QFileDialog.getSaveFileName(self, "创建完整备份", "learning-backup.zip", "ZIP (*.zip)")

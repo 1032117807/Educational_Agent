@@ -15,13 +15,23 @@ os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 
 _QT_PLUGIN_ROOT: Path | None = None
 if sys.platform == "win32":
-    candidate = (
+    pyside_root = (
         Path(sys.prefix)
         / "Lib"
         / "site-packages"
         / "PySide6"
-        / "plugins"
     )
+    process_path = pyside_root / "QtWebEngineProcess.exe"
+    if process_path.is_file():
+        # Conda's Qt lookup can miss PySide's bundled WebEngine subprocess.
+        # This must be set before importing any PySide6 module.
+        os.environ.setdefault("QTWEBENGINEPROCESS_PATH", str(process_path))
+    webengine_resources = pyside_root / "resources"
+    if (webengine_resources / "qtwebengine_resources.pak").is_file():
+        # PySide wheels keep Chromium resources beside the bindings, while
+        # Conda's Qt runtime first looks under Library/share/qt6.
+        os.environ.setdefault("QTWEBENGINE_RESOURCES_PATH", str(webengine_resources))
+    candidate = pyside_root / "plugins"
     if (candidate / "platforms" / "qwindows.dll").is_file():
         _QT_PLUGIN_ROOT = candidate
         os.environ["QT_PLUGIN_PATH"] = str(candidate)
