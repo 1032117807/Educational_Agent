@@ -54,3 +54,22 @@ def test_gateway_honors_cancelled_token_before_starting_server():
             "read_workspace_file", {"relative_path": "ai/mcp_client.py"},
             confirmed=False, cancellation=token,
         )
+
+
+def test_tavily_search_uses_bearer_auth_and_normalizes_results(monkeypatch):
+    from mcp_servers import learning_agent_mcp as server
+
+    captured = {}
+
+    def fake_fetch(url, headers=None, body=None):
+        captured.update(url=url, headers=headers, body=body)
+        return '{"results":[{"title":"Tavily","url":"https://tavily.com","content":"search result"}]}'
+
+    monkeypatch.setattr(server, "TAVILY_KEY", "tvly-test")
+    monkeypatch.setattr(server, "fetch", fake_fetch)
+    assert server.search_web("adaptive learning") == [{
+        "title": "Tavily", "url": "https://tavily.com", "description": "search result",
+    }]
+    assert captured["url"] == "https://api.tavily.com/search"
+    assert captured["headers"]["Authorization"] == "Bearer tvly-test"
+    assert b'"query": "adaptive learning"' in captured["body"]

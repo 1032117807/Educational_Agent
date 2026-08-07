@@ -18,7 +18,7 @@ class MCPGateway:
         ("list_workspace_files", "List files inside the project workspace", False),
         ("read_workspace_file", "Read a UTF-8 file inside the project workspace", False),
         ("fetch_public_url", "Fetch a public HTTPS page from the domain allowlist", False),
-        ("search_web", "Search public web sources through Brave Search", False),
+        ("search_web", "Search public web sources through Tavily Search", False),
         ("write_workspace_file", "Write an allowlisted project file", True),
         ("run_python_in_sandbox", "Run Python inside the Docker sandbox", True),
         ("run_skill_script", "Run an allowlisted executable Agent Skill in the Docker sandbox", True),

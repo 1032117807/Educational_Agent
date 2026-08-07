@@ -6,6 +6,7 @@ import shutil
 from datetime import date, timedelta
 from pathlib import Path
 
+from dotenv import dotenv_values
 from PySide6.QtCore import QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis, QDateTimeAxis
@@ -95,7 +96,7 @@ class SettingsPage(QWidget):
             "list_workspace_files": "Allow listing workspace files",
             "read_workspace_file": "Allow reading workspace files",
             "fetch_public_url": "Allow approved HTTPS sites",
-            "search_web": "Allow Brave web search",
+            "search_web": "Allow Tavily web search",
             "write_workspace_file": "Allow writing approved file types (confirmation required)",
             "run_python_in_sandbox": "Allow Docker Python sandbox (confirmation required)",
             "run_skill_script": "Allow executable Agent Skills in Docker sandbox (confirmation required)",
@@ -169,8 +170,9 @@ class SettingsPage(QWidget):
 
     def refresh_mcp_status(self) -> None:
         docker = "available" if shutil.which("docker") else "not installed"
-        brave = "configured" if os.getenv("BRAVE_SEARCH_API_KEY") else "not configured"
-        self.mcp_status.setText(f"Docker: {docker}; Brave Search: {brave}")
+        env_values = dotenv_values(Path(__file__).resolve().parents[2] / ".env")
+        tavily = "configured" if (os.getenv("TAVILY_API_KEY") or env_values.get("TAVILY_API_KEY")) else "not configured"
+        self.mcp_status.setText(f"Docker: {docker}; Tavily Search: {tavily}")
 
     def backup(self) -> None:
         filename, _ = QFileDialog.getSaveFileName(self, "创建完整备份", "learning-backup.zip", "ZIP (*.zip)")

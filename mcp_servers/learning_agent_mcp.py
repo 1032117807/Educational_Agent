@@ -9,13 +9,15 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("learning-agent-mcp")
 
 WORKSPACE = Path(os.getenv("AGENT_WORKSPACE", Path(__file__).resolve().parents[1]))
+load_dotenv(WORKSPACE / ".env")
 APPROVAL_TOKEN = os.getenv("MCP_APPROVAL_TOKEN", "")
-BRAVE_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "")
+TAVILY_KEY = os.getenv("TAVILY_API_KEY", "")
 SKILLS_DIR = WORKSPACE / "skills"
 
 ALLOWED_HOSTS = {
@@ -23,7 +25,7 @@ ALLOWED_HOSTS = {
     "platform.openai.com",
     "github.com",
     "raw.githubusercontent.com",
-    "api.search.brave.com",
+    "api.tavily.com",
 }
 WRITABLE_SUFFIXES = {".py", ".md", ".json", ".toml", ".txt", ".yaml", ".yml"}
 BLOCKED_PARTS = {".git", ".venv", "__pycache__", "node_modules", ".env"}
@@ -62,13 +64,15 @@ def require_approval(approval_token: str) -> None:
         raise PermissionError("该操作必须经过人工确认")
 
 
-def fetch(url: str, headers: dict[str, str] | None = None) -> str:
+def fetch(
+    url: str, headers: dict[str, str] | None = None, body: bytes | None = None,
+) -> str:
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
         raise PermissionError("仅允许访问 HTTPS 白名单域名")
 
     request = Request(
-        url,
+        url, data=body,
         headers={"User-Agent": "LearningAgent/1.0", **(headers or {})},
     )
     opener = build_opener(NoRedirect())
@@ -130,28 +134,25 @@ def fetch_public_url(url: str) -> str:
 
 @mcp.tool()
 def search_web(query: str) -> list[dict[str, str]]:
-    """使用 Brave Search 搜索公开网络，需要 BRAVE_SEARCH_API_KEY。"""
-    if not BRAVE_KEY:
+    """使用 Tavily Search 搜索公开网络，需要 TAVILY_API_KEY。"""
+    if not TAVILY_KEY:
         return [{
             "title": "Web search is not configured",
             "url": "",
-            "description": "Set BRAVE_SEARCH_API_KEY to enable web search.",
+            "description": "Add TAVILY_API_KEY to the project .env file to enable web search.",
         }]
-        raise PermissionError("未配置 BRAVE_SEARCH_API_KEY")
-
-    from urllib.parse import quote
-
     payload = json.loads(fetch(
-        f"https://api.search.brave.com/res/v1/web/search?q={quote(query)}&count=5",
-        {"Accept": "application/json", "X-Subscription-Token": BRAVE_KEY},
+        "https://api.tavily.com/search",
+        {"Accept": "application/json", "Content-Type": "application/json", "Authorization": f"Bearer {TAVILY_KEY}"},
+        json.dumps({"query": query, "search_depth": "basic", "max_results": 5}).encode("utf-8"),
     ))
     return [
         {
             "title": item.get("title", ""),
             "url": item.get("url", ""),
-            "description": item.get("description", ""),
+            "description": item.get("content", ""),
         }
-        for item in payload.get("web", {}).get("results", [])
+        for item in payload.get("results", [])
     ]
 
 
