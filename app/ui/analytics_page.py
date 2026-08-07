@@ -26,6 +26,7 @@ from app.ui.pages import page_title, stat_card
 from app.ui.icons import IconProvider
 from ai.reports import LearningReport, LearningReportService, render_learning_report
 from app.services.report_export import export_report
+from app.services.adaptive_learning import AdaptiveLearningService
 
 
 def _selected_id(table: QTableWidget) -> int | None:
@@ -96,6 +97,7 @@ class AnalyticsPage(QWidget):
         self.report_factory = report_factory
         self.report_worker: LearningReportWorker | None = None
         self.current_report_markdown = ""
+        self.current_report_snapshot_id: int | None = None
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.addLayout(page_title("学习分析", "统计仅来自本地真实任务、练习和学习记录"))
@@ -163,6 +165,15 @@ class AnalyticsPage(QWidget):
         self.report_export_all_button = QPushButton("Export PDF / Word / HTML")
         self.report_export_all_button.setEnabled(False)
         self.report_export_all_button.clicked.connect(self.export_report_file)
+        self.next_week_plan_button = QPushButton("生成下周自适应计划草稿")
+        self.next_week_plan_button.setEnabled(False)
+        self.next_week_plan_button.clicked.connect(self.create_next_week_plan)
+        self.foundation_practice_button = QPushButton("基础巩固练习")
+        self.error_practice_button = QPushButton("易错强化练习")
+        self.application_practice_button = QPushButton("综合应用练习")
+        self.foundation_practice_button.clicked.connect(lambda: self.create_layered_practice("foundation"))
+        self.error_practice_button.clicked.connect(lambda: self.create_layered_practice("error_focus"))
+        self.application_practice_button.clicked.connect(lambda: self.create_layered_practice("application"))
         controls.addWidget(QLabel("开始"))
         controls.addWidget(self.report_start)
         controls.addWidget(QLabel("结束"))
@@ -170,6 +181,10 @@ class AnalyticsPage(QWidget):
         controls.addWidget(self.report_button)
         controls.addWidget(self.report_export_button)
         controls.addWidget(self.report_export_all_button)
+        controls.addWidget(self.next_week_plan_button)
+        controls.addWidget(self.foundation_practice_button)
+        controls.addWidget(self.error_practice_button)
+        controls.addWidget(self.application_practice_button)
         controls.addStretch()
         self.report_status = QLabel("就绪")
         controls.addWidget(self.report_status)
@@ -312,11 +327,52 @@ class AnalyticsPage(QWidget):
         self.report_export_all_button.setEnabled(True)
         if self.report_factory is not None:
             try:
-                self.report_factory().save_snapshot(report, self.current_report_markdown)
+                saved = self.report_factory().save_snapshot(report, self.current_report_markdown)
+                self.current_report_snapshot_id = saved.id
                 self.refresh_report_history()
             except Exception as exc:
                 QMessageBox.warning(self, "保存 AI 报告失败", str(exc))
         self.report_status.setText("完成")
+        self.next_week_plan_button.setEnabled(True)
+
+    def create_next_week_plan(self) -> None:
+        courses = self.service.list_courses()
+        if not courses:
+            QMessageBox.warning(self, "无法生成计划", "请先创建课程。")
+            return
+        labels = [item.name for item in courses]
+        selected, accepted = QInputDialog.getItem(self, "选择课程", "为哪门课程生成下周计划？", labels, 0, False)
+        if not accepted:
+            return
+        course = courses[labels.index(selected)]
+        try:
+            adaptive = AdaptiveLearningService(self.service.database)
+            draft = adaptive.create_next_week_draft(course.id, report_snapshot_id=self.current_report_snapshot_id)
+            preview = "\n".join(
+                f"{item['date']}: {item['title']}（{item['duration_minutes']} 分钟）"
+                for item in draft.tasks
+            )
+            if QMessageBox.question(
+                self, "确认自适应计划", f"{draft.summary}\n\n{preview}\n\n确认后才会写入学习任务。"
+            ) == QMessageBox.Yes:
+                count = adaptive.confirm_draft(draft.id)
+                QMessageBox.information(self, "计划已写入", f"已创建 {count} 个下周学习任务。")
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法生成计划", str(exc))
+
+    def create_layered_practice(self, layer: str) -> None:
+        course_id = self.course.currentData()
+        if course_id is None:
+            QMessageBox.information(self, "选择课程", "请先在分析页顶部选择一门课程。")
+            return
+        try:
+            practice, questions = AdaptiveLearningService(self.service.database).create_layered_practice(course_id, layer)
+            QMessageBox.information(
+                self, "练习已创建",
+                f"已创建 {len(questions)} 道题的分层练习（会话 #{practice.id}）。请到“练习中心”继续。",
+            )
+        except ValueError as exc:
+            QMessageBox.information(self, "暂无可用练习", str(exc))
 
     def show_report_error(self, message: str) -> None:
         self.report_status.setText("失败")

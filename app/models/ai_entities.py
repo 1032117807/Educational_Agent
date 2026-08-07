@@ -471,6 +471,41 @@ class LearningPlanDraftTask(Base):
     reason: Mapped[str] = mapped_column(Text, default="")
 
 
+class AdaptivePlanDraft(Base):
+    """A deterministic next-week plan, kept separate until the learner confirms it."""
+
+    __tablename__ = "adaptive_plan_drafts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True)
+    report_snapshot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("learning_report_snapshots.id"), nullable=True, index=True
+    )
+    summary: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AdaptivePlanDraftTask(Base):
+    __tablename__ = "adaptive_plan_draft_tasks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    draft_id: Mapped[int] = mapped_column(
+        ForeignKey("adaptive_plan_drafts.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    planned_date: Mapped[date] = mapped_column(Date)
+    title: Mapped[str] = mapped_column(String(160))
+    duration_minutes: Mapped[int] = mapped_column(Integer)
+    priority: Mapped[str] = mapped_column(String(20))
+    layer: Mapped[str] = mapped_column(String(30))
+    knowledge_point_id: Mapped[int | None] = mapped_column(
+        ForeignKey("knowledge_points.id"), nullable=True
+    )
+    reason: Mapped[str] = mapped_column(Text, default="")
+
+
 class LearningReportSnapshot(Base):
     """A generated learning report preserved with the data it was based on."""
 
