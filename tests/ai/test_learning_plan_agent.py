@@ -77,8 +77,8 @@ def test_agent_routes_web_research_requests_to_tavily_search(tmp_path):
 
     decision = service.respond("帮我联网搜索高等数学导数资料")
 
-    assert decision.action == "tool"
-    assert decision.tool_name == "mcp.search_web"
+    assert decision.action == "research_collect"
+    assert decision.research_request
     assert decision.tool_arguments == {"query": "帮我联网搜索高等数学导数资料"}
     db.close()
 

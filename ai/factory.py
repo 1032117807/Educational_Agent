@@ -39,6 +39,7 @@ from app.services.agent_permissions import AgentPermissionService
 from app.services.agent_skills import AgentSkillCatalog
 from app.services.agent_memory import AgentMemoryService
 from app.services.mcp_gateway import MCPGateway
+from app.services.research_curation import ResearchCurationService
 
 def create_resource_indexing_pipeline(
     *,
@@ -297,5 +298,22 @@ def create_learning_plan_agent_service(
             state_path=app_settings.data_dir / "agent_skills.json"
         ),
         memory_service=AgentMemoryService(database),
+        research_factory=lambda: create_research_curation_service(
+            database=database, app_settings=app_settings
+        ),
+    )
+
+
+def create_research_curation_service(
+    *, database: Database, app_settings: AppSettings,
+) -> ResearchCurationService:
+    ai_settings = get_ai_settings()
+    return ResearchCurationService(
+        database=database,
+        app_settings=app_settings,
+        chat_model=create_chat_model(ai_settings),
+        indexing_factory=lambda: create_resource_indexing_pipeline(
+            database=database, app_settings=app_settings
+        ),
     )
   

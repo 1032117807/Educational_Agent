@@ -519,6 +519,44 @@ class LearningReportSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
 
 
+class ResearchRun(Base):
+    """An auditable web-research request for one course."""
+
+    __tablename__ = "research_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True)
+    query: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="completed", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+
+
+class WebResourceCandidate(Base):
+    """A web result and the model's relevance assessment before import."""
+
+    __tablename__ = "web_resource_candidates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    research_run_id: Mapped[int] = mapped_column(
+        ForeignKey("research_runs.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(500), default="")
+    url: Mapped[str] = mapped_column(String(2000), index=True)
+    domain: Mapped[str] = mapped_column(String(255), default="", index=True)
+    snippet: Mapped[str] = mapped_column(Text, default="")
+    relevance_score: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    quality_score: Mapped[int] = mapped_column(Integer, default=0)
+    decision_reason: Mapped[str] = mapped_column(Text, default="")
+    learning_uses_json: Mapped[str] = mapped_column(Text, default="[]")
+    # pending/rejected/imported/failed.  Import is only allowed from pending.
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    imported_resource_id: Mapped[int | None] = mapped_column(
+        ForeignKey("resource_files.id"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class AgentSession(Base):
     """A durable conversation in the unified AI center."""
 

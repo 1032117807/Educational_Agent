@@ -71,6 +71,8 @@ class AgentWorker(QRunnable):
         confirmed: bool = False,
         course_id: int | None = None,
         question_request: str = "",
+        research_request: str = "",
+        candidate_id: int | None = None,
         question_count: int = 5,
         question_difficulty: int = 3,
         goal_title: str = "",
@@ -91,6 +93,8 @@ class AgentWorker(QRunnable):
         self.confirmed = confirmed
         self.course_id = course_id
         self.question_request = question_request
+        self.research_request = research_request
+        self.candidate_id = candidate_id
         self.question_count = question_count
         self.question_difficulty = question_difficulty
         self.goal_title = goal_title
@@ -115,6 +119,7 @@ class AgentWorker(QRunnable):
             draft_id=self.draft_id, tool_name=self.tool_name,
             tool_arguments=self.tool_arguments, confirmed=self.confirmed,
             course_id=self.course_id, question_request=self.question_request,
+            research_request=self.research_request, candidate_id=self.candidate_id,
             question_count=self.question_count, question_difficulty=self.question_difficulty,
             goal_title=self.goal_title, goal_target_date=self.goal_target_date,
             goal_weekly_minutes=self.goal_weekly_minutes,
@@ -195,6 +200,18 @@ class AgentWorker(QRunnable):
                 self.signals.report.emit(service.generate_report())
                 self.signals.agent_stage.emit("learning_report.generate", "completed", "学习报告已生成")
                 self.signals.tool_event.emit("learning_report.generate", "completed", "Report generated")
+            elif self.operation == "research_collect":
+                self.signals.agent_stage.emit("research.search", "running", "Searching and assessing public course resources")
+                self.signals.result.emit(service.collect_research(
+                    course_id=self.course_id or 0, request=self.research_request,
+                ))
+                self.signals.agent_stage.emit("research.search", "completed", "Candidates assessed; import requires confirmation")
+            elif self.operation == "research_import":
+                self.signals.agent_stage.emit("research.import", "running", "Downloading confirmed resource and indexing it for RAG")
+                self.signals.result.emit(service.import_research_candidate(
+                    self.candidate_id or 0, confirmed=self.confirmed,
+                ))
+                self.signals.agent_stage.emit("research.import", "completed", "Resource imported and indexed")
             elif self.operation == "create_goal":
                 self.signals.tool_event.emit("learning_goal.create", "running", "Creating a learning goal")
                 self.signals.result.emit(service.create_goal(
@@ -296,6 +313,7 @@ class LearningAgentPage(QWidget):
         self.pending_daily_minutes = 60
         self.pending_draft_id: int | None = None
         self.pending_tool: tuple[str, dict] | None = None
+        self.pending_research_candidates: list[dict[str, object]] = []
         self.pending_create_goal: tuple[str, date, int, float | None, int | None] | None = None
         self.pending_question_generation: tuple[int, str, int, int] | None = None
         self.pending_memory: tuple[str, str, dict, int | None] | None = None
@@ -629,6 +647,16 @@ class LearningAgentPage(QWidget):
             self._add_inline_action("拒绝", self.cancel_pending_approval)
             self.inline_approval.show()
             return
+        if self.pending_research_candidates:
+            self.inline_approval_title.setText("Confirmed candidates are ready to import into the local RAG library.")
+            for item in self.pending_research_candidates:
+                candidate_id = int(item["candidate_id"])
+                self._add_inline_action(
+                    f"Import #{candidate_id}",
+                    lambda value=candidate_id: self.import_research_candidate(value),
+                )
+            self.inline_approval.show()
+            return
         if self.pending_create_goal is not None:
             title, target_date, weekly_minutes, target_score, course_id = self.pending_create_goal
             self.inline_approval_title.setText(
@@ -686,6 +714,7 @@ class LearningAgentPage(QWidget):
         self.pending_goal_id = None
         self.pending_draft_id = None
         self.pending_tool = None
+        self.pending_research_candidates = []
         self.pending_create_goal = None
         self.pending_memory = None
         self.last_failed_worker = None
@@ -1163,6 +1192,16 @@ class LearningAgentPage(QWidget):
             )
         elif decision.action == "generate_report":
             self._start_worker(AgentWorker(factory=self.agent_factory, operation="generate_report"))
+        elif decision.action == "research_collect":
+            if not decision.course_id:
+                self.chat.append("\n**Agent**\nPlease specify the course before researching resources.")
+                return
+            self._start_worker(AgentWorker(
+                factory=self.agent_factory,
+                operation="research_collect",
+                course_id=decision.course_id,
+                research_request=decision.research_request or self.history[-1]["content"],
+            ))
         elif decision.action == "start_workflow":
             if not decision.course_id:
                 self.chat.append("\n**Agent**\n请先选择课程，再启动学习闭环。")
@@ -1334,6 +1373,30 @@ class LearningAgentPage(QWidget):
 
     def receive_result(self, result: object) -> None:
         operation = self.worker.operation if self.worker is not None else "confirm"
+        if operation == "research_collect":
+            candidates = result if isinstance(result, list) else []
+            accepted = [item for item in candidates if isinstance(item, dict) and item.get("status") == "pending"]
+            lines = ["**Research candidates**", "Only accepted candidates can be imported; each import needs a click confirmation."]
+            for item in candidates:
+                if not isinstance(item, dict):
+                    continue
+                lines.append(
+                    f"- #{item.get('candidate_id')} [{item.get('title', 'Source')}]({item.get('url', '')}) "
+                    f"— relevance {item.get('relevance_score', 0)}, quality {item.get('quality_score', 0)}\n"
+                    f"  {item.get('reason', '')}"
+                )
+            message = "\n".join(lines)
+            self._append_message("assistant", message)
+            self.chat.append(f"\n**Agent**\n{message}")
+            self.pending_research_candidates = accepted
+            self._refresh_inline_approval()
+            return
+        if operation == "research_import":
+            item = result if isinstance(result, dict) else {}
+            message = f"Imported `{item.get('resource_name', '')}` as resource #{item.get('resource_id', '')} and completed RAG indexing."
+            self._append_message("assistant", message)
+            self.chat.append(f"\n**Agent**\n{message}")
+            return
         if operation == "create_goal":
             goal = result if isinstance(result, dict) else {"goal_id": result}
             message = (
@@ -1377,6 +1440,24 @@ class LearningAgentPage(QWidget):
         self.activity.addItem(f"已写入 {count} 个学习任务")
         self.pending_draft_id = None
         self.pending_tool = None
+
+    def import_research_candidate(self, candidate_id: int) -> None:
+        if self.worker is not None:
+            return
+        if QMessageBox.question(
+            self, "Confirm resource import",
+            f"Download candidate #{candidate_id}, save it to the local resource library, and create its RAG index?",
+        ) != QMessageBox.Yes:
+            return
+        self.pending_research_candidates = [
+            item for item in self.pending_research_candidates
+            if int(item["candidate_id"]) != candidate_id
+        ]
+        self._clear_inline_approval()
+        self._start_worker(AgentWorker(
+            factory=self.agent_factory, operation="research_import",
+            candidate_id=candidate_id, confirmed=True,
+        ))
 
     @staticmethod
     def _format_tool_result(result: object, tool_name: str = "") -> str:
