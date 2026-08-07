@@ -238,6 +238,14 @@ class LearningPlanAgentService:
         history: list[dict[str, str]] | None = None,
         progress: Callable[[str, str, str], None] | None = None,
     ) -> AgentDecision:
+        research_words = ("联网", "上网", "搜索", "收集", "找资料", "网上资料", "下载")
+        if any(word in message for word in research_words):
+            return self._enforce_skill_policy(AgentDecision(
+                reply="正在搜索公开网络资料，稍后返回可核验的来源。",
+                action="tool", tool_name="mcp.search_web",
+                tool_arguments_json=json.dumps({"query": message}, ensure_ascii=False),
+                reasoning_summary=["请求包含联网检索意图", "使用只读 Tavily 搜索", "返回来源供用户选择"],
+            ))
         report_words = ("学习报告", "學習報告", "学情报告")
         report_actions = ("生成", "帮我", "帮忙", "下载", "导出", "查看")
         if self.report_factory is not None and any(word in message for word in report_words) and any(
@@ -300,6 +308,14 @@ class LearningPlanAgentService:
     ) -> AgentDecision:
         """Run an async model request that can be cancelled by the desktop UI."""
         cancellation.raise_if_cancelled()
+        research_words = ("联网", "上网", "搜索", "收集", "找资料", "网上资料", "下载")
+        if any(word in message for word in research_words):
+            return self._enforce_skill_policy(AgentDecision(
+                reply="正在搜索公开网络资料，稍后返回可核验的来源。",
+                action="tool", tool_name="mcp.search_web",
+                tool_arguments_json=json.dumps({"query": message}, ensure_ascii=False),
+                reasoning_summary=["请求包含联网检索意图", "使用只读 Tavily 搜索", "返回来源供用户选择"],
+            ))
         report_words = ("学习报告", "学习报告", "学情报告")
         report_actions = ("生成", "帮我", "帮忙", "下载", "导出", "查看")
         if self.report_factory is not None and any(word in message for word in report_words) and any(

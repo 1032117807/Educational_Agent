@@ -68,6 +68,21 @@ def test_agent_tool_arguments_are_parsed_from_json():
     assert decision.tool_arguments == {"id": 12}
 
 
+def test_agent_routes_web_research_requests_to_tavily_search(tmp_path):
+    db = Database(f"sqlite:///{(tmp_path / 'agent.db').as_posix()}")
+    db.create_schema()
+    service = LearningPlanAgentService(
+        database=db, chat_model=FakeStructuredModel(None), plan_factory=lambda: None,
+    )
+
+    decision = service.respond("帮我联网搜索高等数学导数资料")
+
+    assert decision.action == "tool"
+    assert decision.tool_name == "mcp.search_web"
+    assert decision.tool_arguments == {"query": "帮我联网搜索高等数学导数资料"}
+    db.close()
+
+
 def test_agent_decision_keeps_user_visible_reasoning_summary():
     decision = AgentDecision(
         reply="可以生成计划草稿。",

@@ -1139,10 +1139,17 @@ class LearningAgentPage(QWidget):
                 "queued",
                 f"Risk: {risk}\nInput:\n{json.dumps(decision.tool_arguments, ensure_ascii=False, indent=2)}",
             )
-            self.confirm_tool_button.setEnabled(True)
-            self.chat.append(
-                f"\n需要执行项目操作：`{decision.tool_name}`，请确认后执行。"
-            )
+            if decision.tool_name in {"mcp.search_web", "mcp.fetch_public_url"}:
+                self.chat.append(f"\n**Agent**\n正在执行只读联网查询：`{decision.tool_name}`")
+                self._start_worker(AgentWorker(
+                    factory=self.agent_factory, operation="tool", tool_name=decision.tool_name,
+                    tool_arguments=decision.tool_arguments, confirmed=False,
+                ))
+            else:
+                self.confirm_tool_button.setEnabled(True)
+                self.chat.append(
+                    f"\n需要执行项目操作：`{decision.tool_name}`，请确认后执行。"
+                )
 
         elif decision.action == "generate_questions":
             if not decision.course_id or not decision.question_request:
