@@ -1,0 +1,6 @@
+{
+  "version": "1.0.0",
+  "entrypoint": "scripts/compare_answer.py",
+  "description": "Compare an objective answer with its expected answer.",
+  "input_schema": {"expected": "standard answer", "response": "learner answer"}
+}

@@ -14,6 +14,13 @@ def test_mutating_mcp_tool_requires_confirmation():
     assert decision.needs_confirmation
 
 
+def test_executable_skill_requires_confirmation():
+    decision = AgentPermissionService().decide("run_skill_script", confirmed=False)
+
+    assert not decision.allowed
+    assert decision.needs_confirmation
+
+
 def test_unknown_mcp_tool_is_denied():
     decision = AgentPermissionService().decide("run_shell", confirmed=True)
 

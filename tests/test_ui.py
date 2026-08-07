@@ -28,6 +28,7 @@ def test_main_window_and_navigation(qtbot, tmp_path):
     assert window.stack.currentIndex() == 7
     assert window.agent_tabs.count() == 2
     assert window.agent_tabs.tabText(1) == "Agent 2"
+    assert window.agent_tabs.widget(0).inline_approval.isHidden()
     window.navigate(3)
     assert window.stack.currentIndex() == 3
 

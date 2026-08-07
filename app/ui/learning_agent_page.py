@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSplitter,
     QTextBrowser,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -30,10 +32,13 @@ from PySide6.QtWidgets import (
 from ai.agents import AgentDecision, GeneratedPractice, GeneratedReport, LearningPlanAgentService, PlanPreview
 from app.services.domain import JobService
 from app.services.agent_sessions import AgentSessionService
+from app.services.agent_skills import AgentSkillCatalog
+from app.services.agent_memory import AgentMemoryService
 from app.services.agent_workflows import AgentWorkflowService, WorkflowOutcome
 from app.services.report_export import export_report
 from app.services.cancellation import CancellationToken, OperationCancelled
 from app.ui.agent_components import AgentChatInput, AgentChatView, ExecutionTimeline
+from app.ui.skill_manager import SkillManagerDialog
 
 
 class AgentWorkerSignals(QObject):
@@ -223,6 +228,7 @@ class WorkflowWorker(QRunnable):
         self.factory = factory
         self.workflow_id = workflow_id
         self.signals = WorkflowWorkerSignals()
+        self.cancellation = CancellationToken()
         self.setAutoDelete(False)
 
     def run(self) -> None:
@@ -235,7 +241,9 @@ class WorkflowWorker(QRunnable):
                 f"总控 Agent 正在分配任务给 {specialist}\n"
                 f"输入摘要：课程 #{workflow.course_id}；请求：{workflow.request[:120]}"
             )
-            outcome = service.continue_workflow(self.workflow_id, self.signals.tool_event.emit)
+            outcome = service.continue_workflow(
+                self.workflow_id, self.signals.tool_event.emit, self.cancellation
+            )
             self.signals.outcome.emit(outcome)
             self.signals.tool_event.emit(
                 f"handoff.{specialist}", "completed",
@@ -248,6 +256,9 @@ class WorkflowWorker(QRunnable):
             self.signals.failed.emit(str(exc))
         finally:
             self.signals.finished.emit()
+
+    def cancel(self, reason: str = "Cancelled by user") -> None:
+        self.cancellation.cancel(reason)
 
 
 class LearningAgentPage(QWidget):
@@ -266,6 +277,8 @@ class LearningAgentPage(QWidget):
         workflow_factory: Callable[[], AgentWorkflowService],
         session_service: AgentSessionService,
         session_id: int,
+        skill_catalog: AgentSkillCatalog | None = None,
+        memory_service: AgentMemoryService | None = None,
     ) -> None:
         super().__init__()
         self.jobs = jobs
@@ -273,6 +286,8 @@ class LearningAgentPage(QWidget):
         self.workflow_factory = workflow_factory
         self.session_service = session_service
         self.session_id = session_id
+        self.skill_catalog = skill_catalog or AgentSkillCatalog()
+        self.memory_service = memory_service
         self.pool = QThreadPool.globalInstance()
         self.worker: AgentWorker | None = None
         self.workflow_worker: WorkflowWorker | None = None
@@ -283,6 +298,7 @@ class LearningAgentPage(QWidget):
         self.pending_tool: tuple[str, dict] | None = None
         self.pending_create_goal: tuple[str, date, int, float | None, int | None] | None = None
         self.pending_question_generation: tuple[int, str, int, int] | None = None
+        self.pending_memory: tuple[str, str, dict, int | None] | None = None
         self.pending_workflow_id: int | None = None
         self.workflow_state: tuple[str, str] | None = None
         self.last_failed_worker: AgentWorker | None = None
@@ -313,6 +329,14 @@ class LearningAgentPage(QWidget):
         self.new_session_button.setToolTip("在左侧导航中新建独立的 Agent 会话")
         self.new_session_button.clicked.connect(self.new_window_requested.emit)
         session_actions.addWidget(self.new_session_button)
+        self.skills_button = QPushButton("Skills")
+        self.skills_button.setToolTip("管理 Agent 的启用能力和权限范围")
+        self.skills_button.clicked.connect(self.open_skill_manager)
+        session_actions.addWidget(self.skills_button)
+        self.memories_button = QPushButton("记忆")
+        self.memories_button.setToolTip("查看或删除已确认的 Agent 记忆")
+        self.memories_button.clicked.connect(self.show_memories)
+        session_actions.addWidget(self.memories_button)
         root.addLayout(session_actions)
         root.addWidget(QLabel("学习计划 Agent"))
         root.addWidget(QLabel("对话查看学习状态、生成计划草稿，并在确认后写入学习任务。"))
@@ -408,10 +432,6 @@ class LearningAgentPage(QWidget):
         self.confirm_tool_button = QPushButton("确认执行操作")
         self.confirm_tool_button.setEnabled(False)
         self._clear_inline_approval()
-        self.inline_approval_title.setText("执行失败，可重试或取消。")
-        self._add_inline_action("重试", self.retry_last_operation)
-        self._add_inline_action("取消", self.cancel_pending_approval)
-        self.inline_approval.show()
         self.confirm_tool_button.clicked.connect(self.commit_tool)
         self.workflow_continue_button = QPushButton("继续工作流步骤")
         self.workflow_continue_button.clicked.connect(self.continue_workflow)
@@ -454,6 +474,57 @@ class LearningAgentPage(QWidget):
 
     def refresh(self) -> None:
         return
+
+    def open_skill_manager(self) -> None:
+        SkillManagerDialog(self.skill_catalog, self).exec()
+
+    def show_memories(self) -> None:
+        if self.memory_service is None:
+            QMessageBox.warning(self, "记忆不可用", "当前会话没有连接记忆服务。")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Agent 记忆")
+        dialog.resize(760, 440)
+        layout = QVBoxLayout(dialog)
+        table = QTableWidget(0, 6)
+        table.setHorizontalHeaderLabels(["ID", "范围", "课程", "类别", "内容", "更新时间"])
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        memories = self.memory_service.list_all_memories()
+        table.setRowCount(len(memories))
+        for row, item in enumerate(memories):
+            try:
+                content = json.loads(item.content_json or "{}")
+            except json.JSONDecodeError:
+                content = {"raw": item.content_json}
+            values = (
+                str(item.id), item.scope, str(item.course_id or "全局"), item.category,
+                json.dumps(content, ensure_ascii=False), str(item.updated_at),
+            )
+            for column, value in enumerate(values):
+                table.setItem(row, column, QTableWidgetItem(value))
+        table.resizeColumnsToContents()
+        layout.addWidget(table, 1)
+        actions = QHBoxLayout()
+        delete = QPushButton("删除选中记忆")
+        close = QPushButton("关闭")
+        actions.addWidget(delete)
+        actions.addStretch()
+        actions.addWidget(close)
+        layout.addLayout(actions)
+
+        def delete_selected() -> None:
+            row = table.currentRow()
+            if row < 0 or QMessageBox.question(
+                dialog, "删除记忆", "删除后 Agent 将不再使用这条记忆，确认？"
+            ) != QMessageBox.Yes:
+                return
+            memory_id = int(table.item(row, 0).text())
+            self.memory_service.delete_memory(memory_id)
+            table.removeRow(row)
+
+        delete.clicked.connect(delete_selected)
+        close.clicked.connect(dialog.accept)
+        dialog.exec()
 
     def _restore_session(self) -> None:
         _, messages, calls = self.session_service.load(self.session_id)
@@ -524,7 +595,7 @@ class LearningAgentPage(QWidget):
         reviewing = active and status == "waiting_review" and step == "review"
         self.workflow_review_button.setEnabled(reviewing)
         self.workflow_review_confirm_button.setEnabled(reviewing)
-        self.workflow_cancel_button.setEnabled(active and status != "running")
+        self.workflow_cancel_button.setEnabled(active)
         self._refresh_inline_approval()
 
     def _clear_inline_approval(self) -> None:
@@ -542,6 +613,12 @@ class LearningAgentPage(QWidget):
     def _refresh_inline_approval(self) -> None:
         self._clear_inline_approval()
         if self.worker is not None or self.workflow_worker is not None:
+            return
+        if self.last_failed_worker is not None:
+            self.inline_approval_title.setText("执行失败，可重试或取消。")
+            self._add_inline_action("重试", self.retry_last_operation)
+            self._add_inline_action("取消", self.cancel_pending_approval)
+            self.inline_approval.show()
             return
         if self.pending_tool is not None:
             name, arguments = self.pending_tool
@@ -573,6 +650,16 @@ class LearningAgentPage(QWidget):
             self._add_inline_action("取消", self.cancel_pending_approval)
             self.inline_approval.show()
             return
+        if self.pending_memory is not None:
+            scope, category, content, course_id = self.pending_memory
+            self.inline_approval_title.setText(
+                f"需要确认保存记忆：{category}\n"
+                f"{json.dumps(content, ensure_ascii=False)}"
+            )
+            self._add_inline_action("确认保存记忆", self.commit_memory)
+            self._add_inline_action("不保存", self.cancel_pending_approval)
+            self.inline_approval.show()
+            return
         if self.workflow_state is not None:
             status, step = self.workflow_state
             if status == "failed":
@@ -600,6 +687,8 @@ class LearningAgentPage(QWidget):
         self.pending_draft_id = None
         self.pending_tool = None
         self.pending_create_goal = None
+        self.pending_memory = None
+        self.last_failed_worker = None
         self._clear_inline_approval()
         self.chat.append("\n**Agent**\n已取消本次待确认操作。")
 
@@ -651,6 +740,7 @@ class LearningAgentPage(QWidget):
         self.activity_collapse_button.setText("展开" if visible else "收起")
 
     def _start_worker(self, worker: AgentWorker) -> None:
+        self.last_failed_worker = None
         self.worker = worker
         self.send_button.setEnabled(False)
         self.stop_button.setEnabled(True)
@@ -809,10 +899,12 @@ class LearningAgentPage(QWidget):
             self.receive_workflow_error(str(exc))
 
     def cancel_workflow(self) -> None:
-        if self.pending_workflow_id is None or self.workflow_worker is not None:
+        if self.pending_workflow_id is None:
             return
         self._clear_inline_approval()
         try:
+            if self.workflow_worker is not None:
+                self.workflow_worker.cancel()
             workflow = self.workflow_factory().cancel(self.pending_workflow_id)
             self.session_service.record_handoff(
                 self.session_id, "workflow_cancelled", target_id=workflow.id,
@@ -823,6 +915,16 @@ class LearningAgentPage(QWidget):
             self._append_message("assistant", "Workflow cancelled.")
         except ValueError as exc:
             self.receive_workflow_error(str(exc))
+
+    def prepare_for_shutdown(self) -> None:
+        """Request cooperative cancellation before the database is closed."""
+        if self.workflow_worker is None or self.pending_workflow_id is None:
+            return
+        self.workflow_worker.cancel("Application is closing")
+        try:
+            self.workflow_factory().cancel(self.pending_workflow_id)
+        except ValueError:
+            return
 
     def finish_workflow_practice(self, workflow_id: int) -> None:
         if workflow_id != self.pending_workflow_id:
@@ -1005,6 +1107,22 @@ class LearningAgentPage(QWidget):
             self.confirm_plan_button.setEnabled(True)
             self.chat.append("\n计划会先生成草稿，不会立即写入任务。请确认后继续。")
 
+        elif decision.action == "remember":
+            if not decision.memory_category:
+                self.chat.append("\n**Agent**\n没有识别出要保存的记忆类别。")
+                return
+            try:
+                content = json.loads(decision.memory_content_json or "{}")
+            except json.JSONDecodeError:
+                content = {}
+            if not isinstance(content, dict) or not content:
+                self.chat.append("\n**Agent**\n记忆内容为空，暂不保存。")
+                return
+            self.pending_memory = (
+                decision.memory_scope, decision.memory_category, content, decision.course_id
+            )
+            self.chat.append("\n**Agent**\n我只会在你确认后保存这条记忆。")
+
         elif decision.action == "navigate" and decision.route:
             self.session_service.record_handoff(
                 self.session_id, "navigate", payload={"route": decision.route}
@@ -1059,6 +1177,21 @@ class LearningAgentPage(QWidget):
             except ValueError as exc:
                 self.receive_workflow_error(str(exc))
 
+        self._refresh_inline_approval()
+
+    def commit_memory(self) -> None:
+        if self.pending_memory is None or self.memory_service is None:
+            return
+        scope, category, content, course_id = self.pending_memory
+        try:
+            self.memory_service.remember(
+                scope=scope, category=category, content=content,
+                course_id=course_id, confirmed=True,
+            )
+            self.pending_memory = None
+            self.chat.append("\n**Agent**\n已保存到确认记忆。你可以在“记忆”中查看或删除。")
+        except (PermissionError, ValueError) as exc:
+            self.chat.append(f"\n**Agent**\n记忆保存失败：{exc}")
         self._refresh_inline_approval()
 
     def receive_practice(self, generated: GeneratedPractice) -> None:

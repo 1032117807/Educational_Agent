@@ -36,6 +36,8 @@ from ai.gateways import create_chat_model
 from ai.agents import LearningOrchestrator, LearningPlanAgentService
 
 from app.services.agent_permissions import AgentPermissionService
+from app.services.agent_skills import AgentSkillCatalog
+from app.services.agent_memory import AgentMemoryService
 from app.services.mcp_gateway import MCPGateway
 
 def create_resource_indexing_pipeline(
@@ -272,7 +274,10 @@ def create_learning_orchestrator(
         plan_factory=lambda: create_plan_generation_service(database=database, app_settings=app_settings),
     )
 
-def create_learning_plan_agent_service(*, database: Database, app_settings: AppSettings, tool_registry=None) -> LearningPlanAgentService:
+def create_learning_plan_agent_service(
+    *, database: Database, app_settings: AppSettings, tool_registry=None,
+    skill_catalog: AgentSkillCatalog | None = None,
+) -> LearningPlanAgentService:
     ai_settings = get_ai_settings()
     return LearningPlanAgentService(
         database=database,
@@ -288,5 +293,9 @@ def create_learning_plan_agent_service(*, database: Database, app_settings: AppS
             database=database, app_settings=app_settings
         ),
         mcp_gateway=MCPGateway(AgentPermissionService(app_settings.data_dir / "mcp_policy.json")),
+        skill_catalog=skill_catalog or AgentSkillCatalog(
+            state_path=app_settings.data_dir / "agent_skills.json"
+        ),
+        memory_service=AgentMemoryService(database),
     )
   

@@ -16,6 +16,7 @@ mcp = FastMCP("learning-agent-mcp")
 WORKSPACE = Path(os.getenv("AGENT_WORKSPACE", Path(__file__).resolve().parents[1]))
 APPROVAL_TOKEN = os.getenv("MCP_APPROVAL_TOKEN", "")
 BRAVE_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "")
+SKILLS_DIR = WORKSPACE / "skills"
 
 ALLOWED_HOSTS = {
     "docs.python.org",
@@ -182,6 +183,53 @@ def run_python_in_sandbox(code: str, approval_token: str = "") -> dict:
         timeout=30,
     )
     return {
+        "returncode": result.returncode,
+        "stdout": result.stdout[-12_000:],
+        "stderr": result.stderr[-4_000:],
+    }
+
+
+@mcp.tool()
+def run_skill_script(
+    skill_name: str, arguments: dict | None = None, approval_token: str = ""
+) -> dict:
+    """运行 skill.json 声明的 Python 脚本，仅在 Docker 只读沙箱中执行。"""
+    require_approval(approval_token)
+    if not skill_name.replace("-", "").replace("_", "").isalnum():
+        raise ValueError("Skill 名称无效")
+    skill_dir = (SKILLS_DIR / skill_name).resolve(strict=False)
+    if SKILLS_DIR.resolve() not in skill_dir.parents:
+        raise PermissionError("Skill 路径越界")
+    manifest_path = skill_dir / "skill.json"
+    if not manifest_path.is_file():
+        raise ValueError("Skill 没有可执行清单")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entrypoint = manifest.get("entrypoint")
+    if not isinstance(entrypoint, str) or not entrypoint.endswith(".py"):
+        raise ValueError("Skill 入口必须是 Python 脚本")
+    script = (skill_dir / entrypoint).resolve(strict=False)
+    if skill_dir not in script.parents or not script.is_file() or script.is_symlink():
+        raise PermissionError("Skill 入口不在允许目录内")
+    payload = arguments or {}
+    if not isinstance(payload, dict):
+        raise ValueError("Skill 参数必须是对象")
+    encoded = json.dumps(payload, ensure_ascii=False)
+    if len(encoded.encode("utf-8")) > 64_000:
+        raise ValueError("Skill 参数过大")
+    command = [
+        "docker", "run", "--rm", "-i", "--network", "none", "--read-only",
+        "--pids-limit", "64", "--memory", "512m", "--cpus", "0.5",
+        "--security-opt", "no-new-privileges", "--stop-timeout", "1",
+        "-v", f"{WORKSPACE}:/workspace:ro", "-w", "/workspace",
+        "learning-agent-sandbox:latest", "python", "-I",
+        f"/workspace/skills/{skill_name}/{entrypoint}",
+    ]
+    result = subprocess.run(
+        command, shell=False, input=encoded, capture_output=True, text=True,
+        encoding="utf-8", timeout=30,
+    )
+    return {
+        "skill": skill_name,
         "returncode": result.returncode,
         "stdout": result.stdout[-12_000:],
         "stderr": result.stderr[-4_000:],

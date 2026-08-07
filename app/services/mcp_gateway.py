@@ -21,6 +21,7 @@ class MCPGateway:
         ("search_web", "Search public web sources through Brave Search", False),
         ("write_workspace_file", "Write an allowlisted project file", True),
         ("run_python_in_sandbox", "Run Python inside the Docker sandbox", True),
+        ("run_skill_script", "Run an allowlisted executable Agent Skill in the Docker sandbox", True),
     )
 
     def __init__(self, permissions: AgentPermissionService | None = None) -> None:

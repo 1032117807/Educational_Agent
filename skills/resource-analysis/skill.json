@@ -1,0 +1,6 @@
+{
+  "version": "1.0.0",
+  "entrypoint": "scripts/inspect_text.py",
+  "description": "Inspect a workspace text file and return basic evidence statistics.",
+  "input_schema": {"path": "relative text path inside workspace"}
+}

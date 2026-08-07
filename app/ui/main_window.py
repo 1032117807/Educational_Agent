@@ -26,6 +26,8 @@ from app.core.config import AppSettings
 from app.services.learning import LearningService
 from app.services.agent_sessions import AgentSessionService
 from app.services.agent_workflows import AgentWorkflowService
+from app.services.agent_skills import AgentSkillCatalog
+from app.services.agent_memory import AgentMemoryService
 from app.services.domain import (
     AnalyticsService, JobService, MaintenanceService, QuestionService, ResourceService, ReviewService,
 )
@@ -57,6 +59,10 @@ class MainWindow(QMainWindow):
         self.maintenance = MaintenanceService(service.database, config)
         self.tool_registry = ToolRegistry(service.database, config)
         self.agent_sessions = AgentSessionService(service.database)
+        self.agent_skills = AgentSkillCatalog(
+            state_path=config.data_dir / "agent_skills.json"
+        )
+        self.agent_memory = AgentMemoryService(service.database)
         self.jobs = JobService(service.database)
         self.jobs.recover_interrupted()
         self._build_ui()
@@ -213,9 +219,12 @@ class MainWindow(QMainWindow):
                 database=self.service.database,
                 app_settings=self.config,
                 tool_registry=self.tool_registry,
+                skill_catalog=self.agent_skills,
             ),
             session_service=self.agent_sessions,
             session_id=primary_session.id,
+            skill_catalog=self.agent_skills,
+            memory_service=self.agent_memory,
             workflow_factory=lambda: AgentWorkflowService(
                 database=self.service.database,
                 indexing_factory=lambda: create_resource_indexing_pipeline(
@@ -512,9 +521,12 @@ class MainWindow(QMainWindow):
                 database=self.service.database,
                 app_settings=self.config,
                 tool_registry=self.tool_registry,
+                skill_catalog=self.agent_skills,
             ),
             session_service=self.agent_sessions,
             session_id=session_id,
+            skill_catalog=self.agent_skills,
+            memory_service=self.agent_memory,
             workflow_factory=lambda: AgentWorkflowService(
                 database=self.service.database,
                 indexing_factory=lambda: create_resource_indexing_pipeline(
@@ -595,6 +607,11 @@ class MainWindow(QMainWindow):
         self.preferences.setValue("theme", theme)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        for index in range(self.stack.count()):
+            page = self.stack.widget(index)
+            if isinstance(page, LearningAgentPage):
+                page.prepare_for_shutdown()
+                page.pool.waitForDone(3000)
         for job in self.jobs.list():
             if job.status in {"queued", "running"}:
                 self.jobs.cancel(job.id)

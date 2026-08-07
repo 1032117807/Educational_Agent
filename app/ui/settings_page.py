@@ -98,6 +98,7 @@ class SettingsPage(QWidget):
             "search_web": "Allow Brave web search",
             "write_workspace_file": "Allow writing approved file types (confirmation required)",
             "run_python_in_sandbox": "Allow Docker Python sandbox (confirmation required)",
+            "run_skill_script": "Allow executable Agent Skills in Docker sandbox (confirmation required)",
         }
         for name in DEFAULT_POLICY:
             check = QCheckBox(labels[name])

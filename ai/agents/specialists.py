@@ -24,7 +24,10 @@ class ResourceAnalysisSpecialist:
         self.indexing_factory = indexing_factory
         self.extraction_factory = extraction_factory
 
-    def index(self, *, resource_ids: list[int], progress: Progress | None = None) -> SpecialistResult:
+    def index(
+        self, *, resource_ids: list[int], progress: Progress | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> SpecialistResult:
         pipeline = self.indexing_factory()
         for position, resource_id in enumerate(resource_ids, 1):
             if progress:
@@ -34,18 +37,23 @@ class ResourceAnalysisSpecialist:
                 progress=lambda value, resource_id=resource_id: progress(
                     self.name, "running", f"resource {resource_id}: {value}%"
                 ) if progress else None,
+                should_cancel=should_cancel,
             )
         return SpecialistResult(self.name, f"Indexed {len(resource_ids)} resources.", {
             "indexed_resource_ids": resource_ids,
         })
 
-    def extract(self, *, course_id: int, resource_ids: list[int], progress: Progress | None = None) -> SpecialistResult:
+    def extract(
+        self, *, course_id: int, resource_ids: list[int], progress: Progress | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> SpecialistResult:
         result = self.extraction_factory().extract(
             course_id=course_id,
             resource_ids=resource_ids,
             progress=lambda value: progress(
                 self.name, "running", f"knowledge extraction: {value}%"
             ) if progress else None,
+            should_cancel=should_cancel,
         )
         return SpecialistResult(self.name, f"Generated {result.draft_count} knowledge point drafts.", {
             "knowledge_ai_run_id": result.ai_run_id,
@@ -61,12 +69,17 @@ class QuestionSpecialist:
         self.database = database
 
     def run(self, *, course_id: int, request: str, resource_ids: list[int], count: int = 5,
-            difficulty: int = 3, progress: Progress | None = None) -> SpecialistResult:
+            difficulty: int = 3, progress: Progress | None = None,
+            should_cancel: Callable[[], bool] | None = None) -> SpecialistResult:
+        if should_cancel and should_cancel():
+            raise InterruptedError("Question generation cancelled")
         generated = self.question_factory().generate(
             request, course_id=course_id, count=count, difficulty=difficulty,
             resource_ids=resource_ids,
         )
         drafts = QuestionDraftService(self.database)
+        if should_cancel and should_cancel():
+            raise InterruptedError("Question generation cancelled")
         question_ids = [drafts.accept(item) for item in generated.draft_ids]
         return SpecialistResult(self.name, f"Generated {len(question_ids)} practice questions.", {
             "question_draft_ids": list(generated.draft_ids), "question_ids": question_ids,
@@ -94,11 +107,18 @@ class ReportSpecialist:
     def __init__(self, report_factory):
         self.report_factory = report_factory
 
-    def run(self, *, days: int = 7, progress: Progress | None = None) -> SpecialistResult:
+    def run(
+        self, *, days: int = 7, progress: Progress | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> SpecialistResult:
+        if should_cancel and should_cancel():
+            raise InterruptedError("Report generation cancelled")
         end_date = date.today()
         start_date = end_date - timedelta(days=days - 1)
         service = self.report_factory()
         report = service.generate(start_date=start_date, end_date=end_date)
+        if should_cancel and should_cancel():
+            raise InterruptedError("Report generation cancelled")
         saved = service.save_snapshot(report, render_learning_report(report))
         return SpecialistResult(self.name, f"Generated learning report {saved.id}.", {
             "report_snapshot_id": saved.id,

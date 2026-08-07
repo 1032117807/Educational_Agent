@@ -1,0 +1,6 @@
+{
+  "version": "1.0.0",
+  "entrypoint": "scripts/check_python.py",
+  "description": "Parse a workspace Python file without changing it.",
+  "input_schema": {"path": "relative .py path inside workspace"}
+}

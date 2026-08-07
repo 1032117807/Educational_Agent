@@ -13,6 +13,7 @@ from ai.reports import LearningReportService, render_learning_report
 from app.database import Database
 from app.models import AgentHandoff, AgentWorkflow, Course, KnowledgePointDraft, ResourceFile
 from ai.agents.orchestrator import LearningOrchestrator
+from app.services.cancellation import CancellationToken, OperationCancelled
 
 StepProgress = Callable[[str, str, str], None]
 
@@ -108,14 +109,16 @@ class AgentWorkflowService:
     def cancel(self, workflow_id: int) -> AgentWorkflow:
         with self.database.session() as db:
             item = self._get_in_session(db, workflow_id)
-            if item.status == "running":
-                raise ValueError("当前步骤正在运行，完成后再取消")
-            item.status = "cancelled"
+            item.status = "cancelling" if item.status == "running" else "cancelled"
             item.error_message = "用户取消"
             item.updated_at = datetime.now()
             return item
 
-    def continue_workflow(self, workflow_id: int, progress: StepProgress | None = None) -> WorkflowOutcome:
+    def continue_workflow(
+        self, workflow_id: int, progress: StepProgress | None = None,
+        cancellation: CancellationToken | None = None,
+    ) -> WorkflowOutcome:
+        cancellation = cancellation or CancellationToken()
         with self.database.session() as db:
             item = self._get_in_session(db, workflow_id)
             if item.status not in {"waiting_confirmation", "failed", "waiting_report"}:
@@ -128,16 +131,20 @@ class AgentWorkflowService:
             step, course_id, request, context = item.current_step, item.course_id, item.request, self._context(item)
 
         try:
+            cancellation.raise_if_cancelled()
             if step == "analyze":
-                outcome = self._analyze(workflow_id, course_id, context, progress)
+                outcome = self._analyze(workflow_id, course_id, context, progress, cancellation)
             elif step == "extract":
-                outcome = self._extract(workflow_id, course_id, context, progress)
+                outcome = self._extract(workflow_id, course_id, context, progress, cancellation)
             elif step == "questions":
-                outcome = self._questions(workflow_id, course_id, request, context, progress)
+                outcome = self._questions(workflow_id, course_id, request, context, progress, cancellation)
             elif step == "report":
-                outcome = self._report(workflow_id, context, progress)
+                outcome = self._report(workflow_id, context, progress, cancellation)
             else:
                 raise ValueError(f"未知工作流步骤：{step}")
+        except (OperationCancelled, InterruptedError) as exc:
+            self._cancelled(workflow_id, str(exc))
+            raise OperationCancelled(str(exc)) from exc
         except Exception as exc:
             self._fail(workflow_id, str(exc))
             raise
@@ -179,9 +186,9 @@ class AgentWorkflowService:
             f"人工审核已确认，接受 {len(context['accepted_knowledge_point_ids'])} 个知识点，可生成题目",
         )
 
-    def _analyze(self, workflow_id: int, course_id: int, context: dict[str, Any], progress: StepProgress | None) -> WorkflowOutcome:
+    def _analyze(self, workflow_id: int, course_id: int, context: dict[str, Any], progress: StepProgress | None, cancellation: CancellationToken) -> WorkflowOutcome:
         if self.orchestrator is not None:
-            result = self.orchestrator.run("analyze", {**context, "course_id": course_id}, progress)
+            result = self.orchestrator.run("analyze", {**context, "course_id": course_id}, progress, cancellation.is_cancelled)
             context.update(result.context)
             return self._advance(workflow_id, "extract", "waiting_confirmation", context, result.summary)
         resource_ids = list(context.get("resource_ids", []))
@@ -196,9 +203,9 @@ class AgentWorkflowService:
         context["indexed_resource_ids"] = resource_ids
         return self._advance(workflow_id, "extract", "waiting_confirmation", context, "资料已分析，可确认提炼知识点")
 
-    def _extract(self, workflow_id: int, course_id: int, context: dict[str, Any], progress: StepProgress | None) -> WorkflowOutcome:
+    def _extract(self, workflow_id: int, course_id: int, context: dict[str, Any], progress: StepProgress | None, cancellation: CancellationToken) -> WorkflowOutcome:
         if self.orchestrator is not None:
-            result = self.orchestrator.run("extract", {**context, "course_id": course_id}, progress)
+            result = self.orchestrator.run("extract", {**context, "course_id": course_id}, progress, cancellation.is_cancelled)
             context.update(result.context)
             return self._advance(workflow_id, "review", "waiting_review", context, result.summary)
         self._event(progress, "workflow.extract", "running", "根据已索引资料提炼知识点草稿")
@@ -210,10 +217,12 @@ class AgentWorkflowService:
         context.update({"knowledge_ai_run_id": result.ai_run_id, "knowledge_draft_count": result.draft_count})
         return self._advance(workflow_id, "review", "waiting_review", context, f"已生成 {result.draft_count} 个知识点草稿，等待人工审核")
 
-    def _questions(self, workflow_id: int, course_id: int, request: str, context: dict[str, Any], progress: StepProgress | None) -> WorkflowOutcome:
+    def _questions(self, workflow_id: int, course_id: int, request: str, context: dict[str, Any], progress: StepProgress | None, cancellation: CancellationToken) -> WorkflowOutcome:
+        if context.get("question_ids"):
+            return self._advance(workflow_id, "practice", "waiting_confirmation", context, "Reusing previously generated practice questions.")
         if self.orchestrator is not None:
             result = self.orchestrator.run(
-                "questions", {**context, "course_id": course_id, "request": request}, progress
+                "questions", {**context, "course_id": course_id, "request": request}, progress, cancellation.is_cancelled
             )
             context.update(result.context)
             return self._advance(workflow_id, "practice", "waiting_confirmation", context, result.summary)
@@ -230,9 +239,11 @@ class AgentWorkflowService:
         context.update({"question_draft_ids": list(generated.draft_ids), "question_ids": question_ids})
         return self._advance(workflow_id, "practice", "waiting_confirmation", context, f"已生成 {len(question_ids)} 道练习题，可开始练习")
 
-    def _report(self, workflow_id: int, context: dict[str, Any], progress: StepProgress | None) -> WorkflowOutcome:
+    def _report(self, workflow_id: int, context: dict[str, Any], progress: StepProgress | None, cancellation: CancellationToken) -> WorkflowOutcome:
+        if context.get("report_snapshot_id"):
+            return self._advance(workflow_id, "report", "completed", context, "Reusing the previously generated learning report.", complete=True)
         if self.orchestrator is not None:
-            result = self.orchestrator.run("report", context, progress)
+            result = self.orchestrator.run("report", context, progress, cancellation.is_cancelled)
             context.update(result.context)
             return self._advance(workflow_id, "report", "completed", context, result.summary, complete=True)
         self._event(progress, "workflow.report", "running", "汇总练习和学习数据，生成学习报告")
@@ -245,6 +256,11 @@ class AgentWorkflowService:
     def _advance(self, workflow_id: int, next_step: str, status: str, context: dict[str, Any], summary: str, *, complete: bool = False) -> WorkflowOutcome:
         with self.database.session() as db:
             item = self._get_in_session(db, workflow_id)
+            if item.status == "cancelling":
+                item.status = "cancelled"
+                item.error_message = "Cancelled before the step result was applied"
+                item.updated_at = datetime.now()
+                raise OperationCancelled(item.error_message)
             completed_step = item.current_step
             specialist = self.STEP_AGENTS.get(completed_step, completed_step)
             artifact = {
@@ -293,6 +309,13 @@ class AgentWorkflowService:
             item = self._get_in_session(db, workflow_id)
             item.status = "failed"
             item.error_message = message
+            item.updated_at = datetime.now()
+
+    def _cancelled(self, workflow_id: int, message: str) -> None:
+        with self.database.session() as db:
+            item = self._get_in_session(db, workflow_id)
+            item.status = "cancelled"
+            item.error_message = message or "用户取消"
             item.updated_at = datetime.now()
 
     @staticmethod

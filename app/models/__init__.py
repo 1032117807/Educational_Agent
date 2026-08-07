@@ -36,6 +36,7 @@ from app.models.ai_entities import (
     AgentMessage,
     AgentSession,
     AgentToolCall,
+    AgentMemory,
     AgentWorkflow,
 )
 
@@ -49,5 +50,6 @@ __all__ = [
     "SubjectiveGradingCitation", "SubjectiveGradingResult", "ErrorAnalysisResult",
     "LearningPlanDraft", "LearningPlanDraftTask", "LearningReportSnapshot",
     "AgentHandoff", "AgentMessage", "AgentSession", "AgentToolCall",
+    "AgentMemory",
     "AgentWorkflow",
 ]

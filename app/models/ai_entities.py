@@ -527,6 +527,29 @@ class AgentToolCall(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class AgentMemory(Base):
+    """仅保存用户确认过的课程记忆和长期学习偏好。"""
+
+    __tablename__ = "agent_memories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # course 是课程记忆，long_term 是跨课程偏好。
+    scope: Mapped[str] = mapped_column(String(20), index=True)
+    course_id: Mapped[int | None] = mapped_column(
+        ForeignKey("courses.id"), nullable=True, index=True
+    )
+    # goal / plan_preference / weak_point / learning_pace
+    category: Mapped[str] = mapped_column(String(40), index=True)
+    content_json: Mapped[str] = mapped_column(Text, default="{}")
+    source: Mapped[str] = mapped_column(String(30), default="user_confirmed")
+    confirmed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now
+    )
+
+
 class AgentHandoff(Base):
     """Records content delivered from an Agent conversation to an app module."""
 

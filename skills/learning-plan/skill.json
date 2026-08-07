@@ -1,0 +1,6 @@
+{
+  "version": "1.0.0",
+  "entrypoint": "scripts/estimate_daily_minutes.py",
+  "description": "Estimate a daily learning load from remaining work and days.",
+  "input_schema": {"remaining_minutes": "integer", "remaining_days": "integer", "minimum_minutes": "integer"}
+}

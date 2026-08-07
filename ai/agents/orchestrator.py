@@ -23,14 +23,20 @@ class LearningOrchestrator:
         self.plan = LearningPlanSpecialist(plan_factory)
         self.report = ReportSpecialist(report_factory)
 
-    def run(self, step: str, context: dict[str, Any], progress: Progress | None = None) -> SpecialistResult:
+    def run(
+        self, step: str, context: dict[str, Any], progress: Progress | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> SpecialistResult:
         if step == "analyze":
-            return self.resource.index(resource_ids=list(context.get("resource_ids", [])), progress=progress)
+            return self.resource.index(
+                resource_ids=list(context.get("resource_ids", [])), progress=progress,
+                should_cancel=should_cancel,
+            )
         if step == "extract":
             return self.resource.extract(
                 course_id=int(context["course_id"]),
                 resource_ids=list(context.get("indexed_resource_ids", context.get("resource_ids", []))),
-                progress=progress,
+                progress=progress, should_cancel=should_cancel,
             )
         if step == "questions":
             return self.questions.run(
@@ -39,7 +45,7 @@ class LearningOrchestrator:
                 resource_ids=list(context.get("indexed_resource_ids", context.get("resource_ids", []))),
                 count=int(context.get("question_count", 5)),
                 difficulty=int(context.get("difficulty", 3)),
-                progress=progress,
+                progress=progress, should_cancel=should_cancel,
             )
         if step == "plan":
             return self.plan.run(
@@ -48,5 +54,8 @@ class LearningOrchestrator:
                 progress=progress,
             )
         if step == "report":
-            return self.report.run(days=int(context.get("report_days", 7)), progress=progress)
+            return self.report.run(
+                days=int(context.get("report_days", 7)), progress=progress,
+                should_cancel=should_cancel,
+            )
         raise ValueError(f"Unsupported specialist step: {step}")

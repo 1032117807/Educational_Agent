@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 
-MUTATING_MCP_TOOLS = {"write_workspace_file", "run_python_in_sandbox"}
+MUTATING_MCP_TOOLS = {"write_workspace_file", "run_python_in_sandbox", "run_skill_script"}
 
 DEFAULT_POLICY = {
     "list_workspace_files": (True, False),
@@ -14,6 +14,7 @@ DEFAULT_POLICY = {
     "search_web": (True, False),
     "write_workspace_file": (True, True),
     "run_python_in_sandbox": (True, True),
+    "run_skill_script": (True, True),
 }
 
 
