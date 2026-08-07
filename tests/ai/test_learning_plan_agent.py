@@ -83,6 +83,18 @@ def test_agent_routes_web_research_requests_to_tavily_search(tmp_path):
     db.close()
 
 
+def test_agent_keeps_learning_report_download_out_of_web_search(tmp_path):
+    db = Database(f"sqlite:///{(tmp_path / 'agent.db').as_posix()}")
+    db.create_schema()
+    service = LearningPlanAgentService(
+        database=db, chat_model=FakeStructuredModel(None), plan_factory=lambda: None,
+        report_factory=lambda: None,
+    )
+
+    assert service.respond("下载学习报告").action == "generate_report"
+    db.close()
+
+
 def test_agent_decision_keeps_user_visible_reasoning_summary():
     decision = AgentDecision(
         reply="可以生成计划草稿。",

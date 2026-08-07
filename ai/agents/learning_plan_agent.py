@@ -239,7 +239,9 @@ class LearningPlanAgentService:
         progress: Callable[[str, str, str], None] | None = None,
     ) -> AgentDecision:
         research_words = ("联网", "上网", "搜索", "收集", "找资料", "网上资料", "下载")
-        if any(word in message for word in research_words):
+        if any(word in message for word in research_words) and not any(
+            word in message for word in ("学习报告", "學習報告", "学情报告")
+        ):
             return self._enforce_skill_policy(AgentDecision(
                 reply="正在搜索公开网络资料，稍后返回可核验的来源。",
                 action="tool", tool_name="mcp.search_web",
@@ -309,7 +311,9 @@ class LearningPlanAgentService:
         """Run an async model request that can be cancelled by the desktop UI."""
         cancellation.raise_if_cancelled()
         research_words = ("联网", "上网", "搜索", "收集", "找资料", "网上资料", "下载")
-        if any(word in message for word in research_words):
+        if any(word in message for word in research_words) and not any(
+            word in message for word in ("学习报告", "學習報告", "学情报告")
+        ):
             return self._enforce_skill_policy(AgentDecision(
                 reply="正在搜索公开网络资料，稍后返回可核验的来源。",
                 action="tool", tool_name="mcp.search_web",
