@@ -249,6 +249,7 @@ class LearningPlanAgentService:
             return self._enforce_skill_policy(AgentDecision(
                 reply="正在搜索公开网络资料，稍后返回可核验的来源。",
                 action="research_collect", research_request=message,
+                question_request=(message if any(token in message for token in ("出题", "练习题", "试题", "题目")) else ""),
                 tool_arguments_json=json.dumps({"query": message}, ensure_ascii=False),
                 reasoning_summary=["请求包含联网检索意图", "使用只读 Tavily 搜索", "返回来源供用户选择"],
             ))
@@ -321,6 +322,7 @@ class LearningPlanAgentService:
             return self._enforce_skill_policy(AgentDecision(
                 reply="正在搜索公开网络资料，稍后返回可核验的来源。",
                 action="research_collect", research_request=message,
+                question_request=(message if any(token in message for token in ("出题", "练习题", "试题", "题目")) else ""),
                 tool_arguments_json=json.dumps({"query": message}, ensure_ascii=False),
                 reasoning_summary=["请求包含联网检索意图", "使用只读 Tavily 搜索", "返回来源供用户选择"],
             ))
@@ -588,6 +590,7 @@ class LearningPlanAgentService:
         request: str,
         count: int,
         difficulty: int,
+        resource_ids: list[int] | None = None,
         progress: Callable[[str, str, str], None] | None = None,
     ) -> GeneratedPractice:
         if self.question_factory is None:
@@ -600,7 +603,7 @@ class LearningPlanAgentService:
                 count=count,
                 kinds=["单选", "判断", "填空", "简答"],
                 difficulty=difficulty,
-                resource_ids=None,
+                resource_ids=resource_ids,
             )
         except ValueError as first_error:
             if progress is not None:
@@ -618,7 +621,7 @@ class LearningPlanAgentService:
                     count=count,
                     kinds=["单选", "判断", "填空", "简答"],
                     difficulty=difficulty,
-                    resource_ids=None,
+                    resource_ids=resource_ids,
                 )
                 if progress is not None:
                     progress("question_generation.retry", "completed", "重试成功")

@@ -8,6 +8,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QFileDialog,
@@ -71,6 +72,7 @@ class AgentWorker(QRunnable):
         confirmed: bool = False,
         course_id: int | None = None,
         question_request: str = "",
+        resource_ids: list[int] | None = None,
         research_request: str = "",
         candidate_id: int | None = None,
         question_count: int = 5,
@@ -93,6 +95,7 @@ class AgentWorker(QRunnable):
         self.confirmed = confirmed
         self.course_id = course_id
         self.question_request = question_request
+        self.resource_ids = resource_ids
         self.research_request = research_request
         self.candidate_id = candidate_id
         self.question_count = question_count
@@ -119,6 +122,7 @@ class AgentWorker(QRunnable):
             draft_id=self.draft_id, tool_name=self.tool_name,
             tool_arguments=self.tool_arguments, confirmed=self.confirmed,
             course_id=self.course_id, question_request=self.question_request,
+            resource_ids=self.resource_ids,
             research_request=self.research_request, candidate_id=self.candidate_id,
             question_count=self.question_count, question_difficulty=self.question_difficulty,
             goal_title=self.goal_title, goal_target_date=self.goal_target_date,
@@ -191,6 +195,7 @@ class AgentWorker(QRunnable):
                     request=self.question_request,
                     count=self.question_count,
                     difficulty=self.question_difficulty,
+                    resource_ids=self.resource_ids,
                     progress=self.signals.agent_stage.emit,
                 ))
                 self.signals.tool_event.emit("question_drafts.accept", "completed", "题目已入库并交给练习中心")
@@ -315,7 +320,8 @@ class LearningAgentPage(QWidget):
         self.pending_tool: tuple[str, dict] | None = None
         self.pending_research_candidates: list[dict[str, object]] = []
         self.pending_create_goal: tuple[str, date, int, float | None, int | None] | None = None
-        self.pending_question_generation: tuple[int, str, int, int] | None = None
+        self.pending_question_generation: tuple[int, str, int, int, list[int] | None] | None = None
+        self.pending_web_question_request: tuple[int, str, int, int] | None = None
         self.pending_memory: tuple[str, str, dict, int | None] | None = None
         self.pending_workflow_id: int | None = None
         self.workflow_state: tuple[str, str] | None = None
@@ -651,8 +657,9 @@ class LearningAgentPage(QWidget):
             self.inline_approval_title.setText("Confirmed candidates are ready to import into the local RAG library.")
             for item in self.pending_research_candidates:
                 candidate_id = int(item["candidate_id"])
+                is_pdf = str(item.get("url", "")).lower().split("?", 1)[0].endswith(".pdf")
                 self._add_inline_action(
-                    f"Import #{candidate_id}",
+                    (f"Download PDF and import #{candidate_id}" if is_pdf else f"Import #{candidate_id}"),
                     # QPushButton.clicked emits a bool.  Keep it separate so
                     # it cannot overwrite the candidate id captured here.
                     lambda _checked=False, value=candidate_id: self.import_research_candidate(value),
@@ -717,6 +724,7 @@ class LearningAgentPage(QWidget):
         self.pending_draft_id = None
         self.pending_tool = None
         self.pending_research_candidates = []
+        self.pending_web_question_request = None
         self.pending_create_goal = None
         self.pending_memory = None
         self.last_failed_worker = None
@@ -1191,6 +1199,7 @@ class LearningAgentPage(QWidget):
                 decision.question_request,
                 decision.question_count,
                 decision.question_difficulty,
+                None,
             )
         elif decision.action == "generate_report":
             self._start_worker(AgentWorker(factory=self.agent_factory, operation="generate_report"))
@@ -1204,6 +1213,11 @@ class LearningAgentPage(QWidget):
                 course_id=decision.course_id,
                 research_request=decision.research_request or self.history[-1]["content"],
             ))
+            if decision.question_request:
+                self.pending_web_question_request = (
+                    decision.course_id, decision.question_request,
+                    decision.question_count, decision.question_difficulty,
+                )
         elif decision.action == "start_workflow":
             if not decision.course_id:
                 self.chat.append("\n**Agent**\n请先选择课程，再启动学习闭环。")
@@ -1270,6 +1284,9 @@ class LearningAgentPage(QWidget):
         self.chat.append(f"\n**Agent**\n{report_message}")
 
     def download_report(self, url: QUrl) -> None:
+        if url.scheme() in {"http", "https"}:
+            QDesktopServices.openUrl(url)
+            return
         if url.scheme() != "report" or url.host() != "download":
             return
         try:
@@ -1398,6 +1415,12 @@ class LearningAgentPage(QWidget):
             message = f"Imported `{item.get('resource_name', '')}` as resource #{item.get('resource_id', '')} and completed RAG indexing."
             self._append_message("assistant", message)
             self.chat.append(f"\n**Agent**\n{message}")
+            if self.pending_web_question_request and item.get("resource_id"):
+                course_id, request, count, difficulty = self.pending_web_question_request
+                self.pending_question_generation = (
+                    course_id, request, count, difficulty, [int(item["resource_id"])],
+                )
+                self.pending_web_question_request = None
             return
         if operation == "create_goal":
             goal = result if isinstance(result, dict) else {"goal_id": result}
@@ -1513,7 +1536,7 @@ class LearningAgentPage(QWidget):
             return
         self.worker = None
         if self.pending_question_generation is not None:
-            course_id, request, count, difficulty = self.pending_question_generation
+            course_id, request, count, difficulty, resource_ids = self.pending_question_generation
             self.pending_question_generation = None
             self._start_worker(AgentWorker(
                 factory=self.agent_factory,
@@ -1522,6 +1545,7 @@ class LearningAgentPage(QWidget):
                 question_request=request,
                 question_count=count,
                 question_difficulty=difficulty,
+                resource_ids=resource_ids,
             ))
             return
         self.send_button.setEnabled(True)
