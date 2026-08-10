@@ -17,6 +17,7 @@ from app.models import (
     StudySession,
     StudyTask,
 )
+from app.services.report_visualization import ReportVisualizationService
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ class ReportExplanation(BaseModel):
 class LearningReport:
     stats: LearningStats
     explanation: ReportExplanation
+    chart_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,13 @@ def render_learning_report(report: LearningReport) -> str:
     def format_list(items: list[str]) -> str:
         return "\n".join(f"- {item}" for item in items) if items else "- 暂无"
 
+    chart_section = []
+    if report.chart_paths:
+        chart_section = ["", "## 数据图表"]
+        chart_section.extend(
+            f"![学习数据图表 {index}](file:///{path.replace(chr(92), '/')})"
+            for index, path in enumerate(report.chart_paths, 1)
+        )
     return ("\n".join([
         "# AI 学习报告",
         f"周期：{stats.start_date} 至 {stats.end_date}",
@@ -90,6 +99,7 @@ def render_learning_report(report: LearningReport) -> str:
         "",
         "## 下周重点",
         format_list(explanation.next_week_priorities),
+        *chart_section,
     ]) + "\n\n## Data basis\n"
         f"- Objective progress formula: {stats.progress_formula}\n"
         "- Knowledge points used:\n"
@@ -110,9 +120,13 @@ PROMPT = ChatPromptTemplate.from_messages([
 
 
 class LearningReportService:
-    def __init__(self, *, database: Database, chat_model: BaseChatModel) -> None:
+    def __init__(
+        self, *, database: Database, chat_model: BaseChatModel,
+        visualization_service: ReportVisualizationService | None = None,
+    ) -> None:
         self.database = database
         self.model = chat_model.with_structured_output(ReportExplanation)
+        self.visualization_service = visualization_service
 
     def calculate_stats(self, *, start_date: date, end_date: date) -> LearningStats:
         if end_date < start_date:
@@ -168,7 +182,11 @@ class LearningReportService:
         explanation = self.model.invoke(PROMPT.invoke({
             "stats": json.dumps(asdict(stats), ensure_ascii=False, default=str),
         }))
-        return LearningReport(stats=stats, explanation=explanation)
+        chart_paths = (
+            tuple(str(path) for path in self.visualization_service.render(stats))
+            if self.visualization_service is not None else ()
+        )
+        return LearningReport(stats=stats, explanation=explanation, chart_paths=chart_paths)
 
     def save_snapshot(self, report: LearningReport, markdown: str) -> SavedLearningReport:
         with self.database.session() as session:

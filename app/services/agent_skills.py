@@ -26,6 +26,10 @@ DEFAULT_SKILL_METADATA = {
         "display_name": "网页研究",
         "permissions": ["mcp.search_web", "mcp.fetch_public_url"],
     },
+    "report-visualization": {
+        "display_name": "Learning Report Visualization",
+        "permissions": ["local.read_learning_data", "local.write_drafts"],
+    },
     "coding": {
         "display_name": "代码协作",
         "permissions": ["mcp.list_workspace_files", "mcp.read_workspace_file", "mcp.write_workspace_file", "mcp.run_python_in_sandbox"],

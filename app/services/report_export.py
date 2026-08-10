@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import re
 from pathlib import Path
 
 
@@ -8,6 +9,14 @@ def markdown_to_html(markdown: str) -> str:
     lines: list[str] = []
     in_list = False
     for raw_line in markdown.splitlines():
+        image = re.fullmatch(r"!\[([^\]]*)\]\(([^)]+)\)", raw_line.strip())
+        if image:
+            alt, source = image.groups()
+            lines.append(
+                f'<p><img src="{html.escape(source, quote=True)}" '
+                f'alt="{html.escape(alt, quote=True)}" style="max-width:100%;height:auto"></p>'
+            )
+            continue
         line = html.escape(raw_line)
         if line.startswith("# "):
             lines.append(f"<h1>{line[2:]}</h1>")

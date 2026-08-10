@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 from ai.reports import LearningReport, LearningReportService, ReportExplanation, render_learning_report
 from app.database import Database
 from app.models import Course, KnowledgePoint, QuestionAttempt, StudySession, StudyTask
+from app.services.report_visualization import ReportVisualizationService
 
 
 def test_empty_period_returns_zero_metrics(tmp_path):
@@ -58,4 +59,19 @@ def test_report_snapshot_is_saved_and_listed(tmp_path):
     assert saved.id == reports[0].id
     assert reports[0].markdown == markdown
     assert "测试总结" in reports[0].markdown
+    db.close()
+
+
+def test_visualization_service_writes_local_svg_charts(tmp_path):
+    db = Database(f"sqlite:///{(tmp_path / 'report.db').as_posix()}")
+    db.create_schema()
+    service = LearningReportService.__new__(LearningReportService)
+    service.database = db
+    stats = service.calculate_stats(start_date=date(2026, 1, 1), end_date=date(2026, 1, 7))
+    charts = ReportVisualizationService(tmp_path / "charts").render(stats)
+
+    assert len(charts) == 2
+    assert all(path.is_file() and "<svg" in path.read_text(encoding="utf-8") for path in charts)
+    report = LearningReport(stats=stats, explanation=ReportExplanation(summary="summary"), chart_paths=tuple(map(str, charts)))
+    assert "![" in render_learning_report(report)
     db.close()
