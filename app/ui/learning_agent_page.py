@@ -653,7 +653,9 @@ class LearningAgentPage(QWidget):
                 candidate_id = int(item["candidate_id"])
                 self._add_inline_action(
                     f"Import #{candidate_id}",
-                    lambda value=candidate_id: self.import_research_candidate(value),
+                    # QPushButton.clicked emits a bool.  Keep it separate so
+                    # it cannot overwrite the candidate id captured here.
+                    lambda _checked=False, value=candidate_id: self.import_research_candidate(value),
                 )
             self.inline_approval.show()
             return
