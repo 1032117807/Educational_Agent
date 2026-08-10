@@ -1,9 +1,10 @@
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 from ai.reports import LearningReport, LearningReportService, ReportExplanation, render_learning_report
 from app.database import Database
 from app.models import Course, KnowledgePoint, QuestionAttempt, StudySession, StudyTask
-from app.services.report_visualization import ReportVisualizationService
+from app.services.skill_script_runner import SkillScriptRunner
 
 
 def test_empty_period_returns_zero_metrics(tmp_path):
@@ -68,7 +69,9 @@ def test_visualization_service_writes_local_svg_charts(tmp_path):
     service = LearningReportService.__new__(LearningReportService)
     service.database = db
     stats = service.calculate_stats(start_date=date(2026, 1, 1), end_date=date(2026, 1, 7))
-    charts = ReportVisualizationService(tmp_path / "charts").render(stats)
+    service.chart_output_dir = tmp_path / "charts"
+    service.skill_runner = SkillScriptRunner()
+    charts = tuple(map(Path, service._render_charts(stats)))
 
     assert len(charts) == 2
     assert all(path.is_file() and "<svg" in path.read_text(encoding="utf-8") for path in charts)

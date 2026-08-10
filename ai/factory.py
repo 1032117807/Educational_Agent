@@ -40,7 +40,6 @@ from app.services.agent_skills import AgentSkillCatalog
 from app.services.agent_memory import AgentMemoryService
 from app.services.mcp_gateway import MCPGateway
 from app.services.research_curation import ResearchCurationService
-from app.services.report_visualization import ReportVisualizationService
 
 def create_resource_indexing_pipeline(
     *,
@@ -250,7 +249,7 @@ def create_learning_report_service(*, database: Database, app_settings: AppSetti
     return LearningReportService(
         database=database,
         chat_model=create_chat_model(ai_settings),
-        visualization_service=ReportVisualizationService(app_settings.data_dir / "report_charts"),
+        chart_output_dir=app_settings.data_dir / "report_charts",
     )
 
 

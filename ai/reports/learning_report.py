@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
@@ -17,7 +18,7 @@ from app.models import (
     StudySession,
     StudyTask,
 )
-from app.services.report_visualization import ReportVisualizationService
+from app.services.skill_script_runner import SkillScriptRunner
 
 
 @dataclass(frozen=True)
@@ -122,11 +123,13 @@ PROMPT = ChatPromptTemplate.from_messages([
 class LearningReportService:
     def __init__(
         self, *, database: Database, chat_model: BaseChatModel,
-        visualization_service: ReportVisualizationService | None = None,
+        chart_output_dir: Path | None = None,
+        skill_runner: SkillScriptRunner | None = None,
     ) -> None:
         self.database = database
         self.model = chat_model.with_structured_output(ReportExplanation)
-        self.visualization_service = visualization_service
+        self.chart_output_dir = chart_output_dir
+        self.skill_runner = skill_runner or SkillScriptRunner()
 
     def calculate_stats(self, *, start_date: date, end_date: date) -> LearningStats:
         if end_date < start_date:
@@ -182,11 +185,31 @@ class LearningReportService:
         explanation = self.model.invoke(PROMPT.invoke({
             "stats": json.dumps(asdict(stats), ensure_ascii=False, default=str),
         }))
-        chart_paths = (
-            tuple(str(path) for path in self.visualization_service.render(stats))
-            if self.visualization_service is not None else ()
-        )
+        chart_paths = self._render_charts(stats) if self.chart_output_dir is not None else ()
         return LearningReport(stats=stats, explanation=explanation, chart_paths=chart_paths)
+
+    def _render_charts(self, stats: LearningStats) -> tuple[str, ...]:
+        assert self.chart_output_dir is not None
+        self.chart_output_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        response = self.skill_runner.run("report-visualization", {"stats": asdict(stats)})
+        charts = response.get("charts", [])
+        if not isinstance(charts, list):
+            raise ValueError("Visualization Skill returned an invalid charts payload")
+        paths: list[str] = []
+        for item in charts:
+            if not isinstance(item, dict):
+                continue
+            filename = Path(str(item.get("filename", ""))).name
+            content = item.get("svg")
+            if not filename.endswith(".svg") or not isinstance(content, str) or "<svg" not in content:
+                continue
+            path = self.chart_output_dir / f"{stamp}-{filename}"
+            path.write_text(content, encoding="utf-8")
+            paths.append(str(path))
+        if not paths:
+            raise ValueError("Visualization Skill produced no SVG charts")
+        return tuple(paths)
 
     def save_snapshot(self, report: LearningReport, markdown: str) -> SavedLearningReport:
         with self.database.session() as session:

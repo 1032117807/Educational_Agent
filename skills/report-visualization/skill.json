@@ -1,4 +1,6 @@
 {
   "version": "1.0.0",
-  "description": "Render local SVG charts from objective learning report statistics."
+  "entrypoint": "scripts/render_report_charts.py",
+  "description": "Render local SVG charts from objective learning report statistics.",
+  "input_schema": {"stats": "objective learning statistics object"}
 }

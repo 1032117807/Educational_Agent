@@ -6,7 +6,8 @@ description: Generate local, evidence-based charts for learning reports. Use whe
 # Report Visualization
 
 Create charts only from program-calculated `LearningStats`; never invent, smooth,
-or overwrite values. Render locally to SVG in the app data directory.
+or overwrite values. Run `scripts/render_report_charts.py` with a JSON `stats`
+object on stdin; it returns SVG strings as JSON and never writes outside the Skill.
 
 ## Workflow
 
@@ -14,6 +15,13 @@ or overwrite values. Render locally to SVG in the app data directory.
 2. Render a knowledge-point mastery chart, emphasizing lower mastery values.
 3. Embed the local chart paths in the Markdown report and retain the numeric report text.
 4. State when a metric has no data instead of drawing a misleading chart.
+
+## Coding Agent use
+
+Read this Skill and its script before proposing changes. Generate or modify chart
+logic inside `scripts/`, then run it with a representative JSON payload. Use the
+manifest-declared entrypoint through `mcp.run_skill_script` only after user
+confirmation; the sandbox verifies output without granting file-write access.
 
 ## Constraints
 
