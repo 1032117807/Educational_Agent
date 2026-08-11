@@ -30,7 +30,8 @@ class SkillScriptRunner:
             raise PermissionError("Skill entrypoint is invalid")
         result = subprocess.run(
             [sys.executable, "-I", str(script)],
-            input=json.dumps(arguments, ensure_ascii=False, default=str),
+            # 使用 ASCII 转义传递输入，避免父进程向子进程写入异常代理字符失败。
+            input=json.dumps(arguments, ensure_ascii=True, default=str),
             capture_output=True, text=True, encoding="utf-8", timeout=20,
         )
         if result.returncode:

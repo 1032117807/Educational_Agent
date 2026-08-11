@@ -10,6 +10,9 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 def svg(body: str, height: int) -> str:
+    # 历史资料、网页文本或模型输出中可能含有不完整的 Unicode 代理字符。
+    # UTF-8 无法直接编码它们，因此在生成 SVG 前统一替换为安全字符。
+    body = body.encode("utf-8", errors="replace").decode("utf-8")
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" width="760" '
         f'height="{height}" viewBox="0 0 760 {height}">'
@@ -17,6 +20,11 @@ def svg(body: str, height: int) -> str:
         '.title{font-size:22px;font-weight:700}.label{font-size:15px}.value{font-size:18px;font-weight:700}</style>'
         '<rect width="100%" height="100%" fill="#FFFFFF"/>' + body + '</svg>'
     )
+
+
+def safe_text(value: object) -> str:
+    """将异常 Unicode 代理字符替换为可安全写入 SVG 的字符。"""
+    return str(value).encode("utf-8", errors="replace").decode("utf-8")
 
 
 def overview(stats: dict) -> str:
@@ -53,7 +61,7 @@ def mastery(stats: dict) -> str:
     if not points:
         blocks.append('<text x="32" y="92" class="label">本周期暂无可视化知识点数据。</text>')
     for index, point in enumerate(points):
-        name = escape(str(point.get("name", "未命名知识点"))[:24])
+        name = escape(safe_text(point.get("name", "未命名知识点"))[:24])
         value = max(0, min(100, int(point.get("mastery", 0))))
         y = 88 + index * 52
         blocks.extend((
@@ -70,10 +78,11 @@ def main() -> None:
     stats = payload.get("stats", payload)
     if not isinstance(stats, dict):
         raise ValueError("stats must be an object")
+    # 使用 ASCII 转义输出；调用方 json.loads 后会恢复正常中文字符。
     print(json.dumps({"charts": [
         {"filename": "learning-overview.svg", "svg": overview(stats)},
         {"filename": "knowledge-mastery.svg", "svg": mastery(stats)},
-    ]}, ensure_ascii=False))
+    ]}, ensure_ascii=True))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,13 @@
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from ai.reports import LearningReport, LearningReportService, ReportExplanation, render_learning_report
+from ai.reports import (
+    LearningReport,
+    LearningReportService,
+    LearningStats,
+    ReportExplanation,
+    render_learning_report,
+)
 from app.database import Database
 from app.models import Course, KnowledgePoint, QuestionAttempt, StudySession, StudyTask
 from app.services.skill_script_runner import SkillScriptRunner
@@ -78,3 +84,30 @@ def test_visualization_service_writes_local_svg_charts(tmp_path):
     report = LearningReport(stats=stats, explanation=ReportExplanation(summary="summary"), chart_paths=tuple(map(str, charts)))
     assert "![" in render_learning_report(report)
     db.close()
+
+
+def test_visualization_skill_tolerates_invalid_unicode_in_knowledge_point(tmp_path):
+    """网页或模型文本中的孤立代理字符不能让整个报告生成失败。"""
+    service = LearningReportService.__new__(LearningReportService)
+    service.chart_output_dir = tmp_path / "charts"
+    service.skill_runner = SkillScriptRunner()
+    stats = LearningStats(
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 1, 7),
+        study_minutes=30,
+        task_total=1,
+        task_completed=1,
+        task_completion_rate=1.0,
+        attempt_total=1,
+        correct_total=1,
+        accuracy=1.0,
+        # 模拟从网页资料或模型输出中混入的不完整 Unicode 代理字符。
+        weak_points=({"id": 1, "name": "极限\ud800复习", "mastery": 20},),
+        error_types={},
+    )
+
+    charts = tuple(map(Path, service._render_charts(stats)))
+
+    assert len(charts) == 2
+    assert all(path.is_file() for path in charts)
+    assert "极限?复习" in charts[1].read_text(encoding="utf-8")
