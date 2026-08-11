@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from ai.agents import AgentDecision, GeneratedPractice, GeneratedReport, LearningPlanAgentService, PlanPreview
+from app.services.meta_coding import MetaCodeProposal, MetaExecutionResult
 from app.services.domain import JobService
 from app.services.agent_sessions import AgentSessionService
 from app.services.agent_skills import AgentSkillCatalog
@@ -217,6 +218,26 @@ class AgentWorker(QRunnable):
                     self.candidate_id or 0, confirmed=self.confirmed,
                 ))
                 self.signals.agent_stage.emit("research.import", "completed", "Resource imported and indexed")
+            elif self.operation == "meta_propose":
+                self.signals.agent_stage.emit("meta_coding.propose", "running", "Coding Agent is preparing a sandbox-only solution")
+                self.signals.result.emit(service.propose_meta_code(
+                    request=self.message, payload=self.tool_arguments,
+                ))
+                self.signals.agent_stage.emit("meta_coding.propose", "completed", "Temporary code proposal created")
+            elif self.operation == "meta_run":
+                proposal = MetaCodeProposal.model_validate(self.tool_arguments["proposal"])
+                self.signals.agent_stage.emit("meta_coding.run", "running", "Running temporary code in the no-network read-only sandbox")
+                self.signals.result.emit(service.run_meta_code(
+                    proposal=proposal, payload=self.tool_arguments.get("payload", {}),
+                ))
+                self.signals.agent_stage.emit("meta_coding.run", "completed", "Temporary sandbox execution completed")
+            elif self.operation == "meta_publish":
+                proposal = MetaCodeProposal.model_validate(self.tool_arguments["proposal"])
+                self.signals.agent_stage.emit("meta_coding.publish", "running", "Publishing the confirmed reusable Skill")
+                self.signals.result.emit({"skill_path": service.publish_meta_skill(
+                    proposal=proposal, confirmed=self.confirmed,
+                )})
+                self.signals.agent_stage.emit("meta_coding.publish", "completed", "Reusable Skill published")
             elif self.operation == "create_goal":
                 self.signals.tool_event.emit("learning_goal.create", "running", "Creating a learning goal")
                 self.signals.result.emit(service.create_goal(
@@ -322,6 +343,9 @@ class LearningAgentPage(QWidget):
         self.pending_create_goal: tuple[str, date, int, float | None, int | None] | None = None
         self.pending_question_generation: tuple[int, str, int, int, list[int] | None] | None = None
         self.pending_web_question_request: tuple[int, str, int, int] | None = None
+        # Coding Agent 的方案只保存在当前会话；关闭应用不会写入任何代码。
+        self.pending_meta_proposal: MetaCodeProposal | None = None
+        self.pending_meta_execution: MetaCodeProposal | None = None
         self.pending_memory: tuple[str, str, dict, int | None] | None = None
         self.pending_workflow_id: int | None = None
         self.workflow_state: tuple[str, str] | None = None
@@ -653,6 +677,15 @@ class LearningAgentPage(QWidget):
             self._add_inline_action("拒绝", self.cancel_pending_approval)
             self.inline_approval.show()
             return
+        if self.pending_meta_proposal is not None:
+            proposal = self.pending_meta_proposal
+            self.inline_approval_title.setText(
+                f"临时代码已验证。是否发布为可复用 Skill：{proposal.skill_name}？"
+            )
+            self._add_inline_action("确认发布 Skill", self.publish_pending_meta_skill)
+            self._add_inline_action("仅使用本次结果", self.cancel_pending_approval)
+            self.inline_approval.show()
+            return
         if self.pending_research_candidates:
             self.inline_approval_title.setText("Confirmed candidates are ready to import into the local RAG library.")
             for item in self.pending_research_candidates:
@@ -725,6 +758,8 @@ class LearningAgentPage(QWidget):
         self.pending_tool = None
         self.pending_research_candidates = []
         self.pending_web_question_request = None
+        self.pending_meta_proposal = None
+        self.pending_meta_execution = None
         self.pending_create_goal = None
         self.pending_memory = None
         self.last_failed_worker = None
@@ -1203,6 +1238,16 @@ class LearningAgentPage(QWidget):
             )
         elif decision.action == "generate_report":
             self._start_worker(AgentWorker(factory=self.agent_factory, operation="generate_report"))
+        elif decision.action == "meta_code":
+            request = decision.meta_request.strip() or (self.history[-1]["content"] if self.history else "")
+            if not request:
+                self.chat.append("\n**Agent**\nCoding Agent needs a concrete task description.")
+                return
+            self._start_worker(AgentWorker(
+                factory=self.agent_factory,
+                operation="meta_propose",
+                message=request,
+            ))
         elif decision.action == "research_collect":
             if not decision.course_id:
                 self.chat.append("\n**Agent**\nPlease specify the course before researching resources.")
@@ -1392,6 +1437,45 @@ class LearningAgentPage(QWidget):
 
     def receive_result(self, result: object) -> None:
         operation = self.worker.operation if self.worker is not None else "confirm"
+        if operation == "meta_propose":
+            proposal = result if isinstance(result, MetaCodeProposal) else MetaCodeProposal.model_validate(result)
+            self.pending_meta_execution = proposal
+            message = (
+                f"**Coding Agent 方案：{proposal.title}**\n"
+                f"{proposal.explanation}\n\n"
+                f"预期输出：{proposal.expected_output or '未说明'}\n\n"
+                "临时代码将自动在无网络、只读沙箱中运行，不会写入项目文件。"
+            )
+            self._append_message("assistant", message)
+            self.chat.append(f"\n**Agent**\n{message}")
+            return
+        if operation == "meta_run":
+            execution = result if isinstance(result, MetaExecutionResult) else None
+            if execution is None:
+                raise ValueError("Coding Agent returned an invalid sandbox result")
+            output = execution.stdout.strip() or "(no stdout)"
+            message = (
+                "**Coding Agent 沙箱结果**\n"
+                f"返回码：{execution.returncode}\n\n"
+                f"```text\n{output[:6000]}\n```"
+            )
+            if execution.stderr.strip():
+                message += f"\n\n错误输出：\n```text\n{execution.stderr[:2000]}\n```"
+            self._append_message("assistant", message)
+            self.chat.append(f"\n**Agent**\n{message}")
+            self.pending_meta_proposal = (
+                execution.proposal
+                if execution.returncode == 0 and execution.proposal.publishable
+                else None
+            )
+            return
+        if operation == "meta_publish":
+            item = result if isinstance(result, dict) else {}
+            message = f"已发布新的可复用 Skill：`{item.get('skill_path', '')}`"
+            self._append_message("assistant", message)
+            self.chat.append(f"\n**Agent**\n{message}")
+            self.pending_meta_proposal = None
+            return
         if operation == "research_collect":
             candidates = result if isinstance(result, list) else []
             accepted = [item for item in candidates if isinstance(item, dict) and item.get("status") == "pending"]
@@ -1466,6 +1550,19 @@ class LearningAgentPage(QWidget):
         self.pending_draft_id = None
         self.pending_tool = None
 
+    def publish_pending_meta_skill(self) -> None:
+        """用户确认后，才允许 Coding Agent 的代码成为永久 Skill。"""
+        if self.pending_meta_proposal is None or self.worker is not None:
+            return
+        proposal = self.pending_meta_proposal
+        self._clear_inline_approval()
+        self._start_worker(AgentWorker(
+            factory=self.agent_factory,
+            operation="meta_publish",
+            tool_arguments={"proposal": proposal.model_dump()},
+            confirmed=True,
+        ))
+
     def import_research_candidate(self, candidate_id: int) -> None:
         if self.worker is not None:
             return
@@ -1535,6 +1632,15 @@ class LearningAgentPage(QWidget):
         if self.worker is not finished_worker:
             return
         self.worker = None
+        if self.pending_meta_execution is not None:
+            proposal = self.pending_meta_execution
+            self.pending_meta_execution = None
+            self._start_worker(AgentWorker(
+                factory=self.agent_factory,
+                operation="meta_run",
+                tool_arguments={"proposal": proposal.model_dump(), "payload": {}},
+            ))
+            return
         if self.pending_question_generation is not None:
             course_id, request, count, difficulty, resource_ids = self.pending_question_generation
             self.pending_question_generation = None

@@ -5,7 +5,8 @@ import json
 from pathlib import Path
 
 
-MUTATING_MCP_TOOLS = {"write_workspace_file", "run_python_in_sandbox", "run_skill_script"}
+# 临时代码只在无网络、只读 Docker 中执行，不会持久化项目文件。
+MUTATING_MCP_TOOLS = {"write_workspace_file", "run_skill_script"}
 
 DEFAULT_POLICY = {
     "list_workspace_files": (True, False),
@@ -13,7 +14,8 @@ DEFAULT_POLICY = {
     "fetch_public_url": (True, False),
     "search_web": (True, False),
     "write_workspace_file": (True, True),
-    "run_python_in_sandbox": (True, True),
+    # Coding Agent 的临时代码允许自动执行，安全边界由 Docker 强制提供。
+    "run_python_in_sandbox": (True, False),
     "run_skill_script": (True, True),
 }
 

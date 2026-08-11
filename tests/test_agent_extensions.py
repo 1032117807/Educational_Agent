@@ -13,6 +13,7 @@ def test_mcp_policy_is_persisted(tmp_path):
 
     assert not service.decide("fetch_public_url", confirmed=False).allowed
     assert service.decide("write_workspace_file", confirmed=False).needs_confirmation
+    assert service.decide("run_python_in_sandbox", confirmed=False).allowed
 
 
 def test_report_export_writes_markdown_html_and_docx(tmp_path):

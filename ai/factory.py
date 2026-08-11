@@ -40,6 +40,7 @@ from app.services.agent_skills import AgentSkillCatalog
 from app.services.agent_memory import AgentMemoryService
 from app.services.mcp_gateway import MCPGateway
 from app.services.research_curation import ResearchCurationService
+from app.services.meta_coding import MetaCodingService
 
 def create_resource_indexing_pipeline(
     *,
@@ -301,6 +302,13 @@ def create_learning_plan_agent_service(
         memory_service=AgentMemoryService(database),
         research_factory=lambda: create_research_curation_service(
             database=database, app_settings=app_settings
+        ),
+        meta_coding_factory=lambda: MetaCodingService(
+            chat_model=create_chat_model(ai_settings),
+            mcp_gateway=MCPGateway(AgentPermissionService(
+                app_settings.data_dir / "mcp_policy.json"
+            )),
+            skills_dir=Path(__file__).resolve().parents[1] / "skills",
         ),
     )
 
