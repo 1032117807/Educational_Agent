@@ -158,8 +158,10 @@ def search_web(query: str) -> list[dict[str, str]]:
 
 @mcp.tool()
 def run_python_in_sandbox(code: str, approval_token: str = "") -> dict:
-    """在 Docker 无网络只读沙箱执行 Python。"""
-    require_approval(approval_token)
+    """在 Docker 无网络只读沙箱执行临时代码，不写入项目或主机。"""
+    # 此工具与写文件、发布 Skill 不同：Docker 强制无网络、只读、无特权，
+    # 因此低风险临时分析可由上层风险策略自动执行。
+    # 保留 approval_token 参数以兼容既有 MCP 调用，但不以它作为执行前提。
 
     command = [
         "docker", "run", "--rm",

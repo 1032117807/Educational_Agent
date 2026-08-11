@@ -16,6 +16,20 @@ def test_mcp_policy_is_persisted(tmp_path):
     assert service.decide("run_python_in_sandbox", confirmed=False).allowed
 
 
+def test_read_only_sandbox_does_not_require_an_approval_token():
+    """服务端规则必须和低风险自动执行策略保持一致。"""
+    from mcp_servers import learning_agent_mcp
+    import inspect
+
+    source = inspect.getsource(learning_agent_mcp.run_python_in_sandbox)
+    assert "require_approval(approval_token)" not in source
+    assert '"--network", "none"' in source
+    assert '"--read-only"' in source
+
+    skill_source = inspect.getsource(learning_agent_mcp.run_skill_script)
+    assert "require_approval(approval_token)" in skill_source
+
+
 def test_report_export_writes_markdown_html_and_docx(tmp_path):
     markdown = "# Study report\n\n## Summary\nA useful result.\n\n- Practice more"
 
