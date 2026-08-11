@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -62,6 +63,14 @@ def require_approval(approval_token: str) -> None:
         approval_token, APPROVAL_TOKEN
     ):
         raise PermissionError("该操作必须经过人工确认")
+
+
+def require_docker() -> None:
+    """在启动沙箱前给出可操作的环境错误，而不是泄露底层 WinError。"""
+    if shutil.which("docker") is None:
+        raise RuntimeError(
+            "未检测到 Docker。请安装并启动 Docker Desktop，然后重试 Coding Agent。"
+        )
 
 
 def fetch(
@@ -163,6 +172,7 @@ def run_python_in_sandbox(code: str, approval_token: str = "") -> dict:
     # 因此低风险临时分析可由上层风险策略自动执行。
     # 保留 approval_token 参数以兼容既有 MCP 调用，但不以它作为执行前提。
 
+    require_docker()
     command = [
         "docker", "run", "--rm",
         "--network", "none",
@@ -198,6 +208,7 @@ def run_skill_script(
 ) -> dict:
     """运行 skill.json 声明的 Python 脚本，仅在 Docker 只读沙箱中执行。"""
     require_approval(approval_token)
+    require_docker()
     if not skill_name.replace("-", "").replace("_", "").isalnum():
         raise ValueError("Skill 名称无效")
     skill_dir = (SKILLS_DIR / skill_name).resolve(strict=False)

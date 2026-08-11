@@ -30,6 +30,15 @@ def test_read_only_sandbox_does_not_require_an_approval_token():
     assert "require_approval(approval_token)" in skill_source
 
 
+def test_sandbox_reports_a_clear_error_when_docker_is_missing(monkeypatch):
+    from mcp_servers import learning_agent_mcp
+    import pytest
+
+    monkeypatch.setattr(learning_agent_mcp.shutil, "which", lambda _name: None)
+    with pytest.raises(RuntimeError, match="Docker Desktop"):
+        learning_agent_mcp.require_docker()
+
+
 def test_report_export_writes_markdown_html_and_docx(tmp_path):
     markdown = "# Study report\n\n## Summary\nA useful result.\n\n- Practice more"
 
