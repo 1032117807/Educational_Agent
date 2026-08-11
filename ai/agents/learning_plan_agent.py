@@ -26,6 +26,7 @@ from app.services.cancellation import OperationCancelled
 from app.services.research_curation import ResearchCurationService
 from app.services.meta_coding import MetaCodeProposal, MetaCodingService, MetaExecutionResult
 from app.services.course_progress import CourseProgressService
+from app.services.learning_snapshot import LearningSnapshotService
 from ai.reports import LearningReportService, render_learning_report
 
 
@@ -514,7 +515,7 @@ class LearningPlanAgentService:
             request=request,
             available_tools=self.context()["available_tools"],
             available_skills=self.context()["skills"],
-            payload=payload,
+            payload=self.meta_payload(payload),
         )
 
     def run_meta_code(
@@ -524,8 +525,22 @@ class LearningPlanAgentService:
         if self.meta_coding_factory is None:
             raise ValueError("Coding 元能力服务尚未配置")
         return self.meta_coding_factory().run_temporary(
-            proposal=proposal, payload=payload
+            proposal=proposal, payload=self.meta_payload(payload)
         )
+
+    def meta_payload(self, payload: dict | None = None) -> dict:
+        """Inject only a bounded read-only data snapshot into temporary code."""
+        supplied = dict(payload or {})
+        raw_course_id = supplied.pop("course_id", None)
+        course_id = raw_course_id if isinstance(raw_course_id, int) and raw_course_id > 0 else None
+        raw_days = supplied.pop("days", 30)
+        days = raw_days if isinstance(raw_days, int) else 30
+        return {
+            "user_input": supplied,
+            "learning_snapshot": LearningSnapshotService(self.database).build(
+                days=days, course_id=course_id
+            ),
+        }
 
     def publish_meta_skill(self, *, proposal: MetaCodeProposal, confirmed: bool) -> str:
         """仅在 UI 已确认时将验证后的代码持久化为新的 Skill。"""

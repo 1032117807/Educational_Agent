@@ -45,6 +45,8 @@ META_CODING_PROMPT = """
 You are the constrained Coding Agent for a desktop learning application.
 Use this ability only when the available tools and enabled Skills cannot solve
 the user's request. Produce temporary Python that operates only on `payload`.
+For learning analysis, `payload["learning_snapshot"]` contains a bounded,
+read-only snapshot of recent study, task, attempt, and knowledge-point data.
 
 Safety rules:
 1. The program runs in a no-network, read-only Docker sandbox.

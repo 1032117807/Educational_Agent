@@ -39,6 +39,7 @@ from app.services.agent_memory import AgentMemoryService
 from app.services.agent_workflows import AgentWorkflowService, WorkflowOutcome
 from app.services.report_export import export_report
 from app.services.cancellation import CancellationToken, OperationCancelled
+from app.services.agent_risk import AgentRiskService
 from app.ui.agent_components import AgentChatInput, AgentChatView, ExecutionTimeline
 from app.ui.skill_manager import SkillManagerDialog
 
@@ -339,6 +340,9 @@ class LearningAgentPage(QWidget):
         self.pending_daily_minutes = 60
         self.pending_draft_id: int | None = None
         self.pending_tool: tuple[str, dict] | None = None
+        # 只保存在当前窗口/会话内，关闭后自动失效，不写入数据库或配置文件。
+        self.session_approvals: set[str] = set()
+        self.risk_service = AgentRiskService()
         self.pending_research_candidates: list[dict[str, object]] = []
         self.pending_create_goal: tuple[str, date, int, float | None, int | None] | None = None
         self.pending_question_generation: tuple[int, str, int, int, list[int] | None] | None = None
@@ -1204,25 +1208,35 @@ class LearningAgentPage(QWidget):
             self.navigate_requested.emit(decision.route)
             self.activity.addItem(f"已跳转到：{decision.route}")
         elif decision.action == "tool" and decision.tool_name:
-            self.pending_tool = (decision.tool_name, decision.tool_arguments)
-            risk = "requires confirmation" if decision.tool_name in {
-                "mcp.write_workspace_file", "mcp.run_python_in_sandbox"
-            } else "read-only"
+            assessment = self.risk_service.assess_tool(
+                decision.tool_name, decision.tool_arguments
+            )
+            if assessment.level == "deny":
+                self.chat.append(f"\n**Agent**\n已拒绝 `{decision.tool_name}`：{assessment.reason}")
+                self.record_tool_event(decision.tool_name, "failed", assessment.reason)
+                return
             self.record_tool_event(
                 decision.tool_name,
                 "queued",
-                f"Risk: {risk}\nInput:\n{json.dumps(decision.tool_arguments, ensure_ascii=False, indent=2)}",
+                f"风险决策：{assessment.level}；{assessment.reason}\n"
+                f"Input:\n{json.dumps(decision.tool_arguments, ensure_ascii=False, indent=2)}",
             )
-            if decision.tool_name in {"mcp.search_web", "mcp.fetch_public_url"}:
-                self.chat.append(f"\n**Agent**\n正在执行只读联网查询：`{decision.tool_name}`")
+            remembered = (
+                assessment.remember_scope is not None
+                and assessment.remember_scope in self.session_approvals
+            )
+            if assessment.level == "auto" or remembered:
+                mode = "已记住本会话选择" if remembered else "低风险自动执行"
+                self.chat.append(f"\n**Agent**\n{mode}：`{decision.tool_name}`")
                 self._start_worker(AgentWorker(
                     factory=self.agent_factory, operation="tool", tool_name=decision.tool_name,
                     tool_arguments=decision.tool_arguments, confirmed=False,
                 ))
             else:
+                self.pending_tool = (decision.tool_name, decision.tool_arguments)
                 self.confirm_tool_button.setEnabled(True)
                 self.chat.append(
-                    f"\n需要执行项目操作：`{decision.tool_name}`，请确认后执行。"
+                    f"\n需要确认：`{decision.tool_name}`。原因：{assessment.reason}"
                 )
 
         elif decision.action == "generate_questions":
@@ -1417,15 +1431,25 @@ class LearningAgentPage(QWidget):
             return
         self._clear_inline_approval()
         name, arguments = self.pending_tool
+        assessment = self.risk_service.assess_tool(name, arguments)
         message = (
             f"Tool: {name}\n\n"
             f"Input:\n{json.dumps(arguments, ensure_ascii=False, indent=2)}\n\n"
+            f"风险说明：{assessment.reason}\n\n"
             "Continue only if this operation matches your intent."
         )
-        if QMessageBox.question(self, "Confirm agent tool", message) != QMessageBox.Yes:
+        dialog = QMessageBox(QMessageBox.Question, "Confirm agent tool", message, parent=self)
+        dialog.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+        remember = None
+        if assessment.remember_scope is not None:
+            remember = QCheckBox("本次会话记住此选择（关闭窗口后失效）")
+            dialog.setCheckBox(remember)
+        if dialog.exec() != QMessageBox.Ok:
             self.confirm_tool_button.setEnabled(True)
             self.record_tool_event(name, "failed", "User declined the tool call")
             return
+        if remember is not None and remember.isChecked():
+            self.session_approvals.add(assessment.remember_scope)
         self.confirm_tool_button.setEnabled(False)
         self._start_worker(AgentWorker(
             factory=self.agent_factory,
