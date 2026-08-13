@@ -1,0 +1,19 @@
+﻿case_id,module,status,latency_ms,error
+metric-001,metric_self_check,completed,,
+llm-001,llm,failed,1453.443899998092,APIConnectionError: Connection error.
+llm-002,llm,failed,1405.5851000011899,APIConnectionError: Connection error.
+llm-003,llm,failed,1329.068199993344,APIConnectionError: Connection error.
+retrieval-001,keyword_retrieval,completed,0.6137800024589524,
+retrieval-002,keyword_retrieval,completed,0.42373999604023993,
+retrieval-003,keyword_retrieval,completed,0.4084400017745793,
+tool-001,tool_call,completed,5.175119999330491,
+tool-002,tool_call,completed,5.6470599985914305,
+tool-003,tool_call,completed,5.088819999946281,
+robustness-001,robustness_keyword_retrieval,completed,0.003980001201853156,
+robustness-002,robustness_keyword_retrieval,completed,0.004040001658722758,
+robustness-003,robustness_keyword_retrieval,completed,0.46564000367652625,
+robustness-004,robustness_keyword_retrieval,completed,0.007399998139590025,
+availability-embedding,embedding,unavailable,,
+availability-resource_monitoring,resource_monitoring,unavailable,,
+availability-rag_generation,rag_generation,unavailable,,
+availability-charts,charts,unavailable,,

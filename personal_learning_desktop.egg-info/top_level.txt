@@ -1,2 +1,3 @@
 ai
 app
+server

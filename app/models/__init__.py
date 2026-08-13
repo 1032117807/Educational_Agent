@@ -1,5 +1,6 @@
 from app.models.entities import (
     AppSetting,
+    AuditEvent,
     BackgroundJob,
     Course,
     KnowledgePoint,
@@ -43,9 +44,11 @@ from app.models.ai_entities import (
     AgentMemory,
     AgentWorkflow,
 )
+from app.models.identity import Organization, OrganizationMember, RefreshToken, User
 
 __all__ = [
     "AICitation",
+    "AuditEvent",
     "AIRun",
     "AppSetting", "BackgroundJob", "Course", "KnowledgePoint", "PracticeSession", "PracticeSessionQuestion",
     "Question", "QuestionAttempt", "ResourceFile", "ReviewAttempt", "ReviewItem",
@@ -58,4 +61,5 @@ __all__ = [
     "AgentHandoff", "AgentMessage", "AgentSession", "AgentToolCall",
     "AgentMemory",
     "AgentWorkflow",
+    "Organization", "OrganizationMember", "RefreshToken", "User",
 ]

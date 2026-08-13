@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
@@ -10,8 +12,12 @@ import app.models  # noqa: F401
 config = context.config
 database_url = config.attributes.get("database_url")
 if database_url is None:
-    settings.ensure_directories()
-    database_url = settings.database_url
+    # SaaS deployments must set DATABASE_URL explicitly. Fall back to the
+    # desktop SQLite database only when no SaaS URL is provided.
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        settings.ensure_directories()
+        database_url = settings.database_url
 config.set_main_option("sqlalchemy.url", database_url)
 target_metadata = Base.metadata
 

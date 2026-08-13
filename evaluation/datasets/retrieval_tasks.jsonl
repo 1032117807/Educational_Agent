@@ -1,0 +1,3 @@
+{"case_id":"retrieval-001","task_type":"retrieval","query":"函数极限是什么","relevant_chunk_keys":["limit"],"source":"人工编写的功能契约样本","purpose":"验证中文关键词检索和指标计算"}
+{"case_id":"retrieval-002","task_type":"retrieval","query":"导数表示什么","relevant_chunk_keys":["derivative"],"source":"人工编写的功能契约样本","purpose":"验证精确概念检索"}
+{"case_id":"retrieval-003","task_type":"retrieval","query":"连续函数的定义","relevant_chunk_keys":["continuity"],"source":"人工编写的功能契约样本","purpose":"验证第三个独立相关片段"}

@@ -37,6 +37,7 @@ class ResourceIndexingPipeline:
         resource_id: int,
         *,
         force: bool = False,
+        source_path_override=None,
         progress: Callable[[int], None] | None = None,
         should_cancel: Callable[[], bool] | None = None,
     ) -> FullIndexResult:
@@ -55,6 +56,7 @@ class ResourceIndexingPipeline:
         ingestion_result = self.ingestion.ingest(
             resource_id,
             force=force,
+            source_path_override=source_path_override,
         )
 
         if progress:

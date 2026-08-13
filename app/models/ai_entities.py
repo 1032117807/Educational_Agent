@@ -33,6 +33,7 @@ class DocumentIndex(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     resource_id: Mapped[int] = mapped_column(
         ForeignKey("resource_files.id"),
         index=True,
@@ -80,6 +81,7 @@ class DocumentChunk(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     document_index_id: Mapped[int] = mapped_column(
         ForeignKey("document_indexes.id", ondelete="CASCADE"),
         index=True,
@@ -126,6 +128,7 @@ class AIRun(Base):
     __tablename__ = "ai_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     run_uuid: Mapped[str] = mapped_column(
         String(36),
         unique=True,
@@ -183,6 +186,7 @@ class AICitation(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     ai_run_id: Mapped[int] = mapped_column(
         ForeignKey("ai_runs.id", ondelete="CASCADE"),
         index=True,
@@ -366,6 +370,7 @@ class SubjectiveGradingResult(Base):
     __tablename__ = "subjective_grading_results"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     ai_run_id: Mapped[int] = mapped_column(
         ForeignKey("ai_runs.id"), unique=True, index=True
     )
@@ -563,6 +568,7 @@ class AgentSession(Base):
     __tablename__ = "agent_sessions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     title: Mapped[str] = mapped_column(String(160), default="New session")
     archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
@@ -606,6 +612,7 @@ class AgentMemory(Base):
     __tablename__ = "agent_memories"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     # course 是课程记忆，long_term 是跨课程偏好。
     scope: Mapped[str] = mapped_column(String(20), index=True)
     course_id: Mapped[int | None] = mapped_column(
@@ -644,6 +651,7 @@ class AgentWorkflow(Base):
     __tablename__ = "agent_workflows"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     session_id: Mapped[int] = mapped_column(
         ForeignKey("agent_sessions.id", ondelete="CASCADE"), index=True
     )

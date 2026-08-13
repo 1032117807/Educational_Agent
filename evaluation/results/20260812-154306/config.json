@@ -1,0 +1,36 @@
+{
+  "run_timestamp": "2026-08-12T07:43:14.587676+00:00",
+  "repeats": 5,
+  "dataset_version": "evaluation-datasets-v1",
+  "dataset_manifest": {
+    "llm_tasks.jsonl": {
+      "sha256": "ca8871eecfd7cd9140b581f7fa42ce3e8f6774efcea51b71c7cfa24406eaf883",
+      "records": 3
+    },
+    "retrieval_tasks.jsonl": {
+      "sha256": "0975973500388846048ae69bf9f98713e02a7146ab11cb3954106605a896f8e5",
+      "records": 3
+    },
+    "robustness_tasks.jsonl": {
+      "sha256": "1d887eb8d8063d675e5d1edb7f6b7852414ef31ddd2d8957621d43e247443192",
+      "records": 4
+    },
+    "tool_tasks.jsonl": {
+      "sha256": "ca6e424d1b192bf9ee8289a369486bdfc3b6870bfac77107069a0a117a86a5a4",
+      "records": 3
+    }
+  },
+  "environment": {
+    "python": "3.11.15 | packaged by Anaconda, Inc. | (main, Jun 11 2026, 15:12:53) [MSC v.1942 64 bit (AMD64)]",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "cpu_count": 28
+  },
+  "tools": [
+    "pytest（项目已有）",
+    "SQLite FTS5",
+    "SQLAlchemy",
+    "time.perf_counter",
+    "statistics",
+    "项目 ToolRegistry"
+  ]
+}

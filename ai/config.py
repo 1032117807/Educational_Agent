@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class AISettings(BaseSettings):
@@ -58,6 +58,7 @@ class AISettings(BaseSettings):
     ocr_enable_mkldnn: bool = False
 
     embedding_batch_size: int = Field(default=32, ge=1, le=256)
+    embedding_dimensions: int = Field(default=384, ge=1, le=8192)
     vector_collection_prefix: str = "learning_chunks"
 
     model_config = SettingsConfigDict(
@@ -66,6 +67,21 @@ class AISettings(BaseSettings):
         env_prefix="LEARNING_AI_",
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def validate_pgvector_dimensions(self) -> "AISettings":
+        # The current production migration declares document_embeddings as
+        # vector(384). A dimension change is a schema migration plus a full
+        # re-index, not a runtime setting change.
+        if self.embedding_dimensions != 384:
+            raise ValueError(
+                "embedding_dimensions must be 384 until a matching pgvector migration and re-index are deployed"
+            )
+        if self.enabled and not self.api_key.strip():
+            raise ValueError("LEARNING_AI_API_KEY is required when LEARNING_AI_ENABLED=true")
+        if self.provider == "openai_compatible" and self.enabled and not self.base_url:
+            raise ValueError("LEARNING_AI_BASE_URL is required for openai_compatible provider")
+        return self
 
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,6 +17,7 @@ from app.models import (
     DocumentIndex,
     ResourceFile,
 )
+from server.tenant_session import set_session_tenant
 
 
 INDEX_STATUS_LABELS = {
@@ -60,21 +62,43 @@ class DocumentIngestionPipeline:
         parser_registry: DocumentParserRegistry,
         splitter: CitationAwareSplitter,
         embedding_model: str,
+        tenant_id: str | None = None,
     ) -> None:
         self.database = database
         self.workspace_dir = workspace_dir.resolve()
         self.parser_registry = parser_registry
         self.splitter = splitter
         self.embedding_model = embedding_model
+        self.tenant_id = tenant_id
+
+    @contextmanager
+    def _session(self):
+        """Open a database session carrying the worker tenant for PostgreSQL RLS."""
+        session = self.database.session_factory()
+        if self.tenant_id:
+            set_session_tenant(session, self.tenant_id)
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     def ingest(
         self,
         resource_id: int,
         *,
         force: bool = False,
+        source_path_override: Path | None = None,
     ) -> IngestionResult:
         resource = self._get_resource(resource_id)
-        source_path = self._safe_resource_path(resource.relative_path)
+        source_path = (
+            self._safe_override_path(source_path_override)
+            if source_path_override is not None
+            else self._safe_resource_path(resource.relative_path)
+        )
         source_sha256 = file_sha256(source_path)
 
         existing = self._find_existing_index(
@@ -127,7 +151,7 @@ class DocumentIngestionPipeline:
         )
 
     def _get_resource(self, resource_id: int) -> ResourceFile:
-        with self.database.session() as session:
+        with self._session() as session:
             resource = session.get(ResourceFile, resource_id)
 
             if resource is None:
@@ -139,6 +163,7 @@ class DocumentIngestionPipeline:
             # 会话结束后仍需使用这些字段，因此复制为独立对象。
             return ResourceFile(
                 id=resource.id,
+                tenant_id=resource.tenant_id,
                 name=resource.name,
                 original_name=resource.original_name,
                 source_path=resource.source_path,
@@ -170,6 +195,13 @@ class DocumentIngestionPipeline:
 
         return resolved
 
+    @staticmethod
+    def _safe_override_path(source_path: Path) -> Path:
+        resolved = source_path.expanduser().resolve()
+        if not resolved.is_file():
+            raise ValueError("override resource file does not exist")
+        return resolved
+
     def _find_existing_index(
         self,
         *,
@@ -177,7 +209,7 @@ class DocumentIngestionPipeline:
         parser_version: str,
         source_sha256: str,
     ) -> DocumentIndex | None:
-        with self.database.session() as session:
+        with self._session() as session:
             statement = select(DocumentIndex).where(
                 DocumentIndex.resource_id == resource_id,
                 DocumentIndex.parser_version == parser_version,
@@ -193,6 +225,7 @@ class DocumentIngestionPipeline:
 
             return DocumentIndex(
                 id=item.id,
+                tenant_id=item.tenant_id,
                 resource_id=item.resource_id,
                 status=item.status,
                 parser_version=item.parser_version,
@@ -213,7 +246,7 @@ class DocumentIngestionPipeline:
         source_sha256: str,
         existing: DocumentIndex | None,
     ) -> int:
-        with self.database.session() as session:
+        with self._session() as session:
             # 旧内容或旧配置产生的索引不删除，标记为 stale，
             # 后续向量索引清理时仍可追踪。
             old_indexes = list(
@@ -232,6 +265,7 @@ class DocumentIngestionPipeline:
 
             if existing is None:
                 index = DocumentIndex(
+                    tenant_id=resource.tenant_id,
                     resource_id=resource.id,
                     status="parsing",
                     parser_version="document-parser-v1",
@@ -270,7 +304,7 @@ class DocumentIngestionPipeline:
         resource: ResourceFile,
         chunks: list,
     ) -> None:
-        with self.database.session() as session:
+        with self._session() as session:
             index = session.get(DocumentIndex, document_index_id)
 
             if index is None:
@@ -290,6 +324,7 @@ class DocumentIngestionPipeline:
 
                 session.add(
                     DocumentChunk(
+                        tenant_id=resource.tenant_id,
                         document_index_id=document_index_id,
                         resource_id=resource.id,
                         course_id=resource.course_id,
@@ -315,7 +350,7 @@ class DocumentIngestionPipeline:
             index.completed_at = None
 
     def current_index_id(self, resource_id: int) -> int | None:
-        with self.database.session() as session:
+        with self._session() as session:
             item = session.scalar(
                 select(DocumentIndex)
                 .where(DocumentIndex.resource_id == resource_id)
@@ -329,7 +364,7 @@ class DocumentIngestionPipeline:
         document_index_id: int,
         error_message: str,
     ) -> None:
-        with self.database.session() as session:
+        with self._session() as session:
             index = session.get(DocumentIndex, document_index_id)
 
             if index is None:

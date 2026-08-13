@@ -11,6 +11,7 @@ from app.database.session import Base
 class Course(Base):
     __tablename__ = "courses"
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(120), index=True)
     description: Mapped[str] = mapped_column(Text, default="")
     education_stage: Mapped[str] = mapped_column(String(40), default="大学")
@@ -32,6 +33,7 @@ class Course(Base):
 class StudyTask(Base):
     __tablename__ = "study_tasks"
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     title: Mapped[str] = mapped_column(String(160), index=True)
     course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id"), nullable=True)
     task_type: Mapped[str] = mapped_column(String(30), default="学习")
@@ -49,6 +51,7 @@ class StudyTask(Base):
 class Question(Base):
     __tablename__ = "questions"
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id"), nullable=True)
     knowledge_point_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_points.id"), nullable=True)
     kind: Mapped[str] = mapped_column(String(20), default="单选")
@@ -65,6 +68,7 @@ class Question(Base):
 class ReviewItem(Base):
     __tablename__ = "review_items"
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     question_id: Mapped[int | None] = mapped_column(ForeignKey("questions.id"), nullable=True)
     title: Mapped[str] = mapped_column(String(180))
     status: Mapped[str] = mapped_column(String(20), default="new")
@@ -79,6 +83,7 @@ class ReviewItem(Base):
 class ResourceFile(Base):
     __tablename__ = "resource_files"
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(255))
     original_name: Mapped[str] = mapped_column(String(255), default="")
     source_path: Mapped[str] = mapped_column(String(1000), default="")
@@ -94,6 +99,7 @@ class ResourceFile(Base):
 class KnowledgePoint(Base):
     __tablename__ = "knowledge_points"
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True)
     name: Mapped[str] = mapped_column(String(160), index=True)
     mastery: Mapped[int] = mapped_column(Integer, default=0)
@@ -117,6 +123,7 @@ class KnowledgePoint(Base):
 class PracticeSession(Base):
     __tablename__ = "practice_sessions"
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id"), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -130,6 +137,7 @@ class PracticeSession(Base):
 class QuestionAttempt(Base):
     __tablename__ = "question_attempts"
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     session_id: Mapped[int] = mapped_column(ForeignKey("practice_sessions.id"), index=True)
     question_id: Mapped[int] = mapped_column(ForeignKey("questions.id"), index=True)
     response: Mapped[str] = mapped_column(Text, default="")
@@ -141,6 +149,7 @@ class QuestionAttempt(Base):
 class PracticeSessionQuestion(Base):
     __tablename__ = "practice_session_questions"
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     session_id: Mapped[int] = mapped_column(ForeignKey("practice_sessions.id"), index=True)
     question_id: Mapped[int] = mapped_column(ForeignKey("questions.id"), index=True)
     position: Mapped[int] = mapped_column(Integer)
@@ -150,6 +159,7 @@ class PracticeSessionQuestion(Base):
 class ReviewAttempt(Base):
     __tablename__ = "review_attempts"
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     review_item_id: Mapped[int] = mapped_column(ForeignKey("review_items.id"), index=True)
     result: Mapped[str] = mapped_column(String(20))
     previous_streak: Mapped[int] = mapped_column(Integer, default=0)
@@ -160,6 +170,7 @@ class ReviewAttempt(Base):
 class StudySession(Base):
     __tablename__ = "study_sessions"
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id"), nullable=True)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("study_tasks.id"), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
@@ -187,9 +198,23 @@ class ToolCallLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
 
 
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    user_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    action: Mapped[str] = mapped_column(String(120), index=True)
+    target_type: Mapped[str] = mapped_column(String(80), default="")
+    target_id: Mapped[str] = mapped_column(String(80), default="")
+    detail: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+
+
 class BackgroundJob(Base):
     __tablename__ = "background_jobs"
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    requested_by: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     job_type: Mapped[str] = mapped_column(String(80), index=True)
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     progress: Mapped[int] = mapped_column(Integer, default=0)
@@ -204,6 +229,7 @@ class BackgroundJob(Base):
 class StudyGoal(Base):
     __tablename__ = "study_goals"
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     title: Mapped[str] = mapped_column(String(160))
     course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id"), nullable=True)
     target_date: Mapped[date] = mapped_column(Date, index=True)
@@ -217,6 +243,7 @@ class StudyGoal(Base):
 class TaskRecurrence(Base):
     __tablename__ = "task_recurrences"
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     task_id: Mapped[int] = mapped_column(ForeignKey("study_tasks.id"), unique=True)
     frequency: Mapped[str] = mapped_column(String(20), default="none")
     interval: Mapped[int] = mapped_column(Integer, default=1)

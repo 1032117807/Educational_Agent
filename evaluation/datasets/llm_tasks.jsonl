@@ -1,0 +1,3 @@
+{"case_id":"llm-001","task_type":"llm","prompt":"只输出数字 4，不要任何解释：2 + 2 等于多少？","expected_output":"4","source":"人工编写的确定性算术样本","metric":"exact_match"}
+{"case_id":"llm-002","task_type":"llm","prompt":"只输出以下 JSON，不要 Markdown：{\"capital\":\"Paris\"}。问题：法国首都是哪里？","expected_output":"{\"capital\":\"Paris\"}","source":"人工编写的格式遵循样本","metric":"json_field"}
+{"case_id":"llm-003","task_type":"llm","prompt":"只输出“是”或“否”：所有偶数都能被 2 整除吗？","expected_output":"是","source":"人工编写的确定性指令遵循样本","metric":"exact_match"}

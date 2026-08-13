@@ -1,0 +1,83 @@
+name: SaaS Infrastructure Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "docker-compose.saas.yml"
+      - "docker/**"
+      - "migrations/**"
+      - "scripts/grant_saas_runtime_role.py"
+      - "scripts/verify_saas_integration.py"
+      - "server/**"
+      - "app/**"
+      - "ai/**"
+      - "pyproject.toml"
+      - ".github/workflows/saas-integration.yml"
+  workflow_dispatch:
+
+jobs:
+  verify-saas-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      APP_ENV: production
+      SECRET_KEY: ci-only-secret-key-with-at-least-32-characters
+      POSTGRES_PASSWORD: ci-migration-password-not-for-production
+      APP_DB_USER: learning_app
+      APP_DB_PASSWORD: ci-runtime-password-not-for-production
+      REDIS_PASSWORD: ci-redis-password-not-for-production
+      OBJECT_STORAGE_ACCESS_KEY: learning-ci
+      OBJECT_STORAGE_SECRET_KEY: ci-minio-secret-not-for-production
+      CORS_ORIGINS: http://localhost:8000
+      LEARNING_AI_ENABLED: "false"
+      LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create runtime environment file
+        run: |
+          cp .env.example .env
+          cat >> .env <<'EOF'
+          APP_ENV=production
+          SECRET_KEY=ci-only-secret-key-with-at-least-32-characters
+          POSTGRES_PASSWORD=ci-migration-password-not-for-production
+          APP_DB_USER=learning_app
+          APP_DB_PASSWORD=ci-runtime-password-not-for-production
+          REDIS_PASSWORD=ci-redis-password-not-for-production
+          OBJECT_STORAGE_ACCESS_KEY=learning-ci
+          OBJECT_STORAGE_SECRET_KEY=ci-minio-secret-not-for-production
+          CORS_ORIGINS=http://localhost:8000
+          LEARNING_AI_ENABLED=false
+          LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY=false
+          EOF
+
+      - name: Build and start SaaS services
+        run: docker compose -f docker-compose.saas.yml up -d --build
+
+      - name: Wait for API readiness
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8000/health/ready; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not become ready" >&2
+          exit 1
+
+      - name: Verify PostgreSQL pgvector and RLS isolation
+        run: |
+          docker compose -f docker-compose.saas.yml exec -T \
+            -e DATABASE_URL="postgresql+psycopg://learning:${POSTGRES_PASSWORD}@postgres:5432/learning" \
+            -e APP_DB_USER="${APP_DB_USER}" \
+            api python scripts/verify_saas_integration.py
+
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.saas.yml logs --no-color
+
+      - name: Stop SaaS services
+        if: always()
+        run: docker compose -f docker-compose.saas.yml down -v --remove-orphans

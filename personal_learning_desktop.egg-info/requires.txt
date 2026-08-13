@@ -5,15 +5,21 @@ pydantic-settings>=2.2
 alembic>=1.13
 langchain-core<2.0,>=1.0
 langchain-openai<2.0,>=1.0
-langchain-huggingface<2.0,>=1.0
 langchain-chroma<2.0,>=1.0
 langchain-text-splitters<2.0,>=1.0
-sentence-transformers<6.0,>=5.0
+fastembed<1.0,>=0.8
 chromadb<2.0,>=1.0
 PyMuPDF>=1.24
 python-docx>=1.1
 python-pptx>=1.0
 jieba<1.0,>=0.42
+mcp<2.0,>=1.0
+fastapi<1.0,>=0.115
+uvicorn[standard]<1.0,>=0.30
+psycopg[binary]<4.0,>=3.2
+python-multipart<1.0,>=0.0.9
+PyJWT<3.0,>=2.9
+pwdlib[argon2]<1.0,>=0.2
 
 [build]
 Nuitka==2.5.1

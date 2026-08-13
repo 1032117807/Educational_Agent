@@ -1,0 +1,19 @@
+.compact-form { margin-top: 14px; }
+.compact-form label { display: grid; gap: 6px; font-weight: 600; }
+.compact-form input[type="file"] { height: auto; padding: 8px; }
+.job-status { min-height: 84px; border-top: 1px solid #edf0f2; padding-top: 12px; }
+.job-status strong { display: block; margin-bottom: 5px; }
+.answer-text { white-space: pre-wrap; line-height: 1.65; margin: 8px 0; }
+.citation-list { display: grid; gap: 8px; margin-top: 12px; }
+.citation { border-left: 3px solid #70a9c9; background: #f5f8fa; padding: 9px 10px; line-height: 1.55; }
+.citation strong { color: #1264a3; }
+.member-form { display: grid; grid-template-columns: minmax(220px, 1fr) 150px auto auto; gap: 8px; background: #eaf1f5; padding: 12px; margin-bottom: 14px; border-radius: 6px; }
+.member-actions { display: flex; gap: 6px; align-items: center; }
+.member-actions select { width: 112px; }
+@media (max-width: 760px) { .member-form { grid-template-columns: 1fr; } .member-actions { flex-wrap: wrap; } }
+@media (max-width: 760px) { .compact-form { width: 100%; } }
+.button-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.knowledge-form{display:grid;grid-template-columns:1.2fr 1.4fr 1fr 2fr repeat(2,minmax(72px,.55fr)) auto auto;gap:8px;margin:0 0 16px}
+.knowledge-form input,.knowledge-form select{min-width:0}
+@media(max-width:900px){.knowledge-form{grid-template-columns:repeat(2,minmax(0,1fr))}.knowledge-form button{width:auto}}
+@media(max-width:560px){.knowledge-form{grid-template-columns:1fr}.button-row{width:100%}.button-row button{flex:1}}
