@@ -1,4 +1,6 @@
 from ai.retrieval.hybrid import HybridRetriever, RetrievalHit
+from ai.retrieval.query_planner import RetrievalQueryPlan, RetrievalQueryPlanner
+from ai.retrieval.agentic import AgenticRAG, RetrievalObservation
 from ai.retrieval.keyword_store import (
     KeywordHit,
     SQLiteKeywordIndex,
@@ -31,6 +33,10 @@ __all__ = [
     "HybridRetriever",
     "KeywordHit",
     "RetrievalHit",
+    "RetrievalQueryPlan",
+    "RetrievalQueryPlanner",
+    "AgenticRAG",
+    "RetrievalObservation",
     "SQLiteKeywordIndex",
     "SemanticHit",
     "VectorIndexResult",

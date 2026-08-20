@@ -1,6 +1,11 @@
-# Error Diagnosis
+---
+name: error-diagnosis
+description: >
+  Diagnose learner mistakes from recorded evidence and propose focused review without changing records automatically.
+version: 1.1.0
+---
 
-Version: 1.0.0
+# Workflow
 
 Diagnose incorrect answers from the question, learner response, standard answer,
 and recorded evidence. Explain the likely misconception and propose a focused

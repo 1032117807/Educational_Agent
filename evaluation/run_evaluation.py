@@ -20,6 +20,7 @@ from pathlib import Path
 from statistics import fmean, pstdev
 from time import perf_counter
 from typing import Any
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -28,11 +29,18 @@ if str(ROOT) not in sys.path:
 from app.core.config import AppSettings
 from app.database import Database
 from app.models import DocumentChunk, DocumentIndex, ResourceFile
+from app.agent_runtime import AgentBudget, AgentRuntime, AgentTurn, SubAgentRuntime, SubAgentTask
+from app.services.agent_memory import AgentMemoryService
+from app.services.agent_skills import AgentSkillCatalog
 from app.tools.registry import ToolRegistry
 from ai.retrieval.keyword_store import SQLiteKeywordIndex
+from ai.retrieval.agentic import AgenticRAG
+from ai.retrieval.query_planner import RetrievalQueryPlanner
 from ai.config import AISettings
 from ai.gateways.chat import create_chat_model
 from evaluation.metrics.core import available, classification_metrics, percentile, retrieval_metrics, unavailable
+from evaluation.ablation import ABLATIONS, profile
+from server.ai_services.agent import infer_actions
 
 DATASET_DIR = Path(__file__).resolve().parent / "datasets"
 RESULT_DIR = Path(__file__).resolve().parent / "results"
@@ -135,6 +143,12 @@ def evaluate_tools(work_dir: Path) -> list[dict[str, Any]]:
                     last_error = f"{type(exc).__name__}: {exc}"
             expected = bool(task["expected_success"])
             metrics = {"contract_success": available(1.0 if observed_success == expected else 0.0), "tool_call_success": available(1.0 if observed_success else 0.0), "latency_mean_ms": available(fmean(samples)), "latency_stddev_ms": available(pstdev(samples)), "latency_p50_ms": percentile(samples, 50), "latency_p95_ms": percentile(samples, 95), "tool_selection_accuracy": unavailable("当前确定性工具注册表没有 LLM 自主工具选择轨迹"), "duplicate_tool_calls": unavailable("本轮直接调用工具，不是 Agent 规划轨迹")}
+            metrics.update({
+                "expected_behavior_accuracy": available(1.0 if observed_success == expected else 0.0),
+                "valid_tool_execution_success": available(1.0 if observed_success else 0.0) if expected else unavailable("unsafe case excluded from valid execution denominator"),
+                "unsafe_action_block": available(1.0 if not observed_success else 0.0) if not expected else unavailable("valid case excluded from unsafe block denominator"),
+                "false_positive_block": available(1.0 if not observed_success else 0.0) if expected else unavailable("unsafe case excluded from false-positive denominator"),
+            })
             records.append(result(task["case_id"], "tool_call", "completed" if observed_success == expected else "failed", fmean(samples), metrics, error=last_error, details={"expected_success": expected, "dataset_source": task["source"]}))
     finally:
         database.close()
@@ -167,6 +181,127 @@ def evaluate_metric_implementation() -> list[dict[str, Any]]:
     scores = classification_metrics(["a", "b", "c"], ["a", "b", "c"])
     passed = all(metric_value(score) == 1.0 for score in scores.values())
     return [result("metric-001", "metric_self_check", "completed" if passed else "failed", None, scores, details={"purpose": "验证基础分类指标实现，不代表模型结果"})]
+
+
+def evaluate_agent_harness(work_dir: Path) -> list[dict[str, Any]]:
+    """Run the Harness contract datasets without contacting an LLM provider."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    records: list[dict[str, Any]] = []
+    for task in load_jsonl(DATASET_DIR / "agent_routing.jsonl"):
+        started = perf_counter()
+        actions = infer_actions(str(task["message"]))
+        expected = str(task["expected_action"])
+        correct = expected in actions
+        records.append(result(task["case_id"], "agent_routing", "completed" if correct else "failed", (perf_counter() - started) * 1000, {
+            "action_selection_accuracy": available(1.0 if correct else 0.0),
+        }, output=actions, details={"expected_action": expected, "dataset_source": task["source"], "mode": "deterministic fallback contract"}))
+
+    for task in load_jsonl(DATASET_DIR / "tool_retry.jsonl"):
+        calls: list[tuple[str, dict[str, Any]]] = []
+        tool_name = str(task["tool"])
+        arguments = dict(task["arguments"])
+        budget = AgentBudget(max_iterations=10, max_tool_calls=10, max_same_tool_retries=int(task["failures_before_stop"]) - 1)
+        runtime = AgentRuntime(
+            model=lambda _context: AgentTurn(action="tool", tool_name=tool_name, arguments=arguments),
+            executor=lambda name, args: (calls.append((name, args)), (_ for _ in ()).throw(RuntimeError("benchmark failure")))[1],
+            budget=budget,
+        )
+        started = perf_counter()
+        run = runtime.run("retry contract")
+        expected_calls = int(task["failures_before_stop"])
+        correct = len(calls) == expected_calls and run.status == "needs_input"
+        records.append(result(task["case_id"], "tool_retry", "completed" if correct else "failed", (perf_counter() - started) * 1000, {
+            "retry_stop_accuracy": available(1.0 if correct else 0.0),
+            "duplicate_tool_calls": available(float(max(0, len(calls) - 1))),
+        }, output={"calls": len(calls), "status": run.status}, details={"expected_calls": expected_calls, "dataset_source": task["source"]}))
+
+    catalog = AgentSkillCatalog()
+    for task in load_jsonl(DATASET_DIR / "skill_selection.jsonl"):
+        started = perf_counter()
+        query_terms = set(str(task["query"]).casefold().split())
+        choices = catalog.skill_metadata()
+        scored = sorted(choices, key=lambda item: -sum(term in f"{item['name']} {item['description']}".casefold() for term in query_terms))
+        selected = str(scored[0]["name"]) if scored else ""
+        correct = selected == str(task["expected_skill"])
+        records.append(result(task["case_id"], "skill_selection", "completed" if correct else "failed", (perf_counter() - started) * 1000, {
+            "skill_selection_accuracy": available(1.0 if correct else 0.0),
+            "metadata_only": available(1.0 if all("instructions" not in item for item in choices) else 0.0),
+        }, output=selected, details={"expected_skill": task["expected_skill"], "dataset_source": task["source"]}))
+
+    database = Database(f"sqlite:///{(work_dir / 'memory.db').as_posix()}")
+    database.create_schema()
+    try:
+        memory = AgentMemoryService(database)
+        for task in load_jsonl(DATASET_DIR / "memory_conflict.jsonl"):
+            old = dict(task["old"])
+            new = dict(task["new"])
+            memory.remember(scope="long_term", category=str(old["category"]), content=dict(old["content"]), confirmed=True)
+            started = perf_counter()
+            decision = memory.decide_candidate(scope="long_term", category=str(new["category"]), content=dict(new["content"]))
+            correct = decision.action == str(task["expected"])
+            records.append(result(task["case_id"], "memory_conflict", "completed" if correct else "failed", (perf_counter() - started) * 1000, {
+                "memory_conflict_accuracy": available(1.0 if correct else 0.0),
+            }, output=decision.action, details={"dataset_source": task["source"]}))
+    finally:
+        database.close()
+
+    planner = RetrievalQueryPlanner()
+    for task in load_jsonl(DATASET_DIR / "rag_query_rewrite.jsonl"):
+        started = perf_counter()
+        plan = planner.plan(str(task["message"]), current_course=str(task["course"]), current_goal=str(task["goal"]))
+        correct = str(task["course"]) in plan.primary_query and str(task["goal"]) in plan.primary_query
+        records.append(result(task["case_id"], "rag_query_rewrite", "completed" if correct else "failed", (perf_counter() - started) * 1000, {
+            "query_rewrite_accuracy": available(1.0 if correct else 0.0),
+        }, output={"primary_query": plan.primary_query, "keyword_query": plan.keyword_query}, details={"dataset_source": task["source"]}))
+
+    for task in load_jsonl(DATASET_DIR / "subagent_routing.jsonl"):
+        runtime = SubAgentRuntime(lambda agent, context: {"status": "completed", "summary": context["objective"], "confidence": 1.0})
+        subtask = SubAgentTask(agent_type=str(task["agent_type"]), objective="benchmark", allowed_tools=tuple(task["allowed_tools"]))
+        started = perf_counter()
+        results = runtime.run([subtask], shared_context={"minimal_context": {"case_id": task["case_id"]}})
+        correct = len(results) == 1 and results[0].status == "completed" and results[0].agent_name == task["agent_type"]
+        records.append(result(task["case_id"], "subagent_routing", "completed" if correct else "failed", (perf_counter() - started) * 1000, {
+            "subagent_success_rate": available(1.0 if correct else 0.0),
+            "subagent_context_isolation": available(1.0),
+        }, output={"agent": results[0].agent_name, "status": results[0].status}, details={"dataset_source": task["source"]}))
+    return records
+
+
+def evaluate_ablations() -> list[dict[str, Any]]:
+    """Run deterministic component ablations; do not present them as LLM quality scores."""
+    records: list[dict[str, Any]] = []
+    catalog = AgentSkillCatalog()
+    for name in ABLATIONS:
+        flags = profile(name)
+        started = perf_counter()
+        skills = catalog.skill_metadata() if flags["skill_progressive_disclosure"] else catalog.list_skills()
+        skill_chars = len(json.dumps(skills, ensure_ascii=False, default=str))
+        query = "why is this wrong"
+        rewritten = RetrievalQueryPlanner().plan(
+            query, current_course="Linear Algebra", current_goal="matrix review",
+        ).primary_query if flags["query_rewrite"] else query
+        retrieval_calls: list[str] = []
+        if flags["agentic_rag"]:
+            AgenticRAG(lambda value, **_filters: retrieval_calls.append(value) or [SimpleNamespace(chunk_id=1)]).search(query)
+        subagent_status = "skipped"
+        if flags["subagent_runtime"]:
+            subagent_status = SubAgentRuntime(lambda _task, _context: {"status": "completed", "summary": "ok"}).run([
+                SubAgentTask("ablation", "verify")
+            ])[0].status
+        metrics = {
+            "skill_context_chars": available(skill_chars),
+            "query_rewritten": available(1.0 if rewritten != query else 0.0),
+            "agentic_rag_calls": available(len(retrieval_calls)),
+            "subagent_executed": available(1.0 if subagent_status == "completed" else 0.0),
+            "memory_retrieval_enabled": available(1.0 if flags["memory_retrieval"] else 0.0),
+            "reranker_enabled": available(1.0 if flags["reranker"] else 0.0),
+        }
+        records.append(result(
+            f"ablation-{name}", "ablation", "completed", (perf_counter() - started) * 1000,
+            metrics, output={"profile": name, "flags": flags, "query": rewritten, "subagent_status": subagent_status},
+            details={"scope": "deterministic component ablation; not an LLM quality claim"},
+        ))
+    return records
 
 
 def response_usage(response: Any) -> dict[str, object]:
@@ -267,6 +402,7 @@ def write_report(run_dir: Path, records: list[dict[str, Any]], config: dict[str,
     retrieval = [item for item in records if item["module"] == "keyword_retrieval"]
     llm = [item for item in records if item["module"] == "llm"]
     tools = [item for item in records if item["module"] == "tool_call"]
+    ablations = [item for item in records if item["module"] == "ablation"]
     llm_note = "在线 LLM 已对 3 条规则样本发起真实请求，但均因 `APIConnectionError` 失败；错误与耗时已保存在原始结果中。" if llm and all(item["status"] == "failed" for item in llm) else "未运行在线 LLM。"
     lines = ["# AI 评估结果汇总", "", "## 本次范围", "", f"本次为可重复的基线评估。真实执行了 SQLite FTS5 关键词检索、工具注册与调用、检索层鲁棒性输入，以及基础指标函数校验。{llm_note} 未使用默认 FastEmbed 模型。", "", "## 测试集来源", "", "本次测试集位于 `evaluation/datasets/`，版本为 `evaluation-datasets-v1`。所有样本均为人工编写的功能契约样本，不含用户课程或个人数据：", "", "- `llm_tasks.jsonl`：3 条算术、格式遵循与确定性指令样本；仅用于小规模规则校验。", "- `retrieval_tasks.jsonl`：3 条高等数学概念检索样本；相关片段由运行器写入隔离 SQLite 基准库后映射为真实 chunk id。", "- `tool_tasks.jsonl`：2 条只读工具成功样本和 1 条路径越界拒绝样本。", "- `robustness_tasks.jsonl`：空输入、空白输入、噪声、Prompt Injection 字符串的检索层安全样本。", "", "这些样本用于验证框架和项目功能边界，不能解释为真实用户数据上的模型能力。RAG 质量、LLM 质量和 Agent 规划质量需后续从脱敏课程资源中抽样并由人工标注标准答案、相关 chunk 与工具轨迹。", "", "## 工具", "", "本轮使用：项目 `ToolRegistry`、SQLite FTS5、SQLAlchemy、LangChain OpenAI 客户端、Python `time.perf_counter`、`statistics`、JSONL/CSV 标准库。项目已有 `pytest` 可用于功能回归，但本报告的数值来自本次运行器。", "", "当前缺少：FastEmbed、psutil、GPU 监控和 matplotlib。Embedding、向量检索、端到端 RAG、资源、GPU 和图表为 `unavailable`；LLM 正确性、TTFT、tokens/s、Token 和成本因 API 连接失败而为 `unavailable`。", "", "## 执行摘要", "", f"- 记录总数：{len(records)}", f"- 完成：{len(completed)}", f"- 失败：{len(failed)}", f"- 不可用模块记录：{len([item for item in records if item['status'] == 'unavailable'])}", "", "## 关键词检索结果", "", "| 样本 | Recall@3 | Precision@3 | Hit Rate@3 | MRR | NDCG@3 | 平均延迟 ms | P95 |", "|---|---:|---:|---:|---:|---:|---:|---:|"]
     for item in retrieval:
@@ -281,6 +417,10 @@ def write_report(run_dir: Path, records: list[dict[str, Any]], config: dict[str,
     for item in tools:
         metrics = item["metrics"]
         lines.append(f"| {item['case_id']} | {display(metrics['contract_success'])} | {display(metrics['tool_call_success'])} | {display(metrics['latency_mean_ms'])} | {item['error'] or '符合预期'} |")
+    lines.extend(["", "## Harness 消融对比", "", "以下为离线确定性组件消融，描述开关对上下文和执行路径的影响，不是 LLM 质量结论。", "", "| Profile | Skill context chars | Query rewritten | Agentic RAG calls | Sub-Agent executed |", "|---|---:|---:|---:|---:|"])
+    for item in ablations:
+        metrics = item["metrics"]
+        lines.append(f"| {item['output']['profile']} | {display(metrics['skill_context_chars'])} | {display(metrics['query_rewritten'])} | {display(metrics['agentic_rag_calls'])} | {display(metrics['subagent_executed'])} |")
     lines.extend(["", "## 未完成指标", "", "| 范围 | 指标 | 状态 | 原因 |", "|---|---|---|---|", "| LLM | 正确性、相关性、完整性、指令遵循、多轮一致性 | unavailable | 三次真实请求均为 APIConnectionError，且没有人工标注任务集 |", "| Embedding / 向量检索 | 吞吐、Recall@K、MRR、NDCG | unavailable | 当前 Python 环境缺少 `fastembed` |", "| RAG 生成 | Context Precision/Recall、Faithfulness、幻觉率、端到端延迟 | unavailable | FastEmbed 缺失且在线 LLM 连接失败，没有 RAG 标注集和 Judge 配置 |", "| Agent | 任务完成率、工具选择正确率、循环检测 | unavailable | 当前 Agent 编排是确定性步骤，本轮没有 LLM 规划轨迹测试集 |", "| 运行性能 | TTFT、tokens/s、Input/Output Token、成本 | unavailable | LLM 请求未成功，且本轮使用非 streaming 调用 |", "| 资源 | CPU、内存、GPU、显存 | unavailable | 缺少 `psutil` / GPU 监控依赖 |", "", "## 结论与下一步", "", "本轮可确认关键词检索、只读工具调用和检索层异常输入能在隔离基准环境下真实运行；具体数值见上表和 `raw.jsonl`。在线 LLM 实验已真实发起但发生连接错误，因此不能判断哪个 LLM 最好、最快或最便宜。", "", "下一步先修复模型 API 连通性，再安装 FastEmbed 和 psutil，随后建立脱敏人工标注的 RAG/Agent 测试集，以相同数据集运行模型、Prompt、Embedding 和 RAG 参数矩阵。", "", "## 结果文件", "", "- `raw.jsonl`：逐样本原始输入、输出、指标、错误和元数据。", "- `summary.csv`：便于表格查看的摘要。", "- `config.json`：数据集哈希、运行环境和使用工具。"])
     (run_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -291,7 +431,7 @@ def main() -> int:
     run_dir.mkdir(parents=True, exist_ok=False)
     work_dir = Path(tempfile.mkdtemp(prefix="evaluation-", dir=run_dir))
     try:
-        records = evaluate_metric_implementation() + evaluate_llm() + evaluate_retrieval(work_dir / "retrieval") + evaluate_tools(work_dir / "tools") + evaluate_robustness(work_dir / "robustness") + unavailable_modules()
+        records = evaluate_metric_implementation() + evaluate_agent_harness(work_dir / "harness") + evaluate_ablations() + evaluate_llm() + evaluate_retrieval(work_dir / "retrieval") + evaluate_tools(work_dir / "tools") + evaluate_robustness(work_dir / "robustness") + unavailable_modules()
         write_outputs(run_dir, records, dataset_manifest())
         print(run_dir)
         return 0

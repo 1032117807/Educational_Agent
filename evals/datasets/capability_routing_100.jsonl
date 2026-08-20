@@ -1,0 +1,100 @@
+{"id": "cap-001", "kind": "skill", "prompt": "Research authoritative calculus references on limits.", "expected": "research"}
+{"id": "cap-002", "kind": "skill", "prompt": "Find and compare public sources for matrix multiplication.", "expected": "research"}
+{"id": "cap-003", "kind": "skill", "prompt": "Search the web for a beginner probability textbook.", "expected": "research"}
+{"id": "cap-004", "kind": "skill", "prompt": "Collect online course materials about derivatives.", "expected": "research"}
+{"id": "cap-005", "kind": "skill", "prompt": "Verify these learning resources against independent sources.", "expected": "research"}
+{"id": "cap-006", "kind": "skill", "prompt": "Analyze my imported lecture notes and extract the key concepts.", "expected": "resource-analysis"}
+{"id": "cap-007", "kind": "skill", "prompt": "Index the uploaded PDF and identify its main knowledge points.", "expected": "resource-analysis"}
+{"id": "cap-008", "kind": "skill", "prompt": "Break this course material into concepts and evidence.", "expected": "resource-analysis"}
+{"id": "cap-009", "kind": "skill", "prompt": "Extract a structured outline from the attached study resource.", "expected": "resource-analysis"}
+{"id": "cap-010", "kind": "skill", "prompt": "Review my document for missing concepts and source locations.", "expected": "resource-analysis"}
+{"id": "cap-011", "kind": "skill", "prompt": "Create a study plan for my calculus exam next month.", "expected": "learning-plan"}
+{"id": "cap-012", "kind": "skill", "prompt": "Arrange my weekly learning tasks around a 60 minute daily budget.", "expected": "learning-plan"}
+{"id": "cap-013", "kind": "skill", "prompt": "Plan the next two weeks of practice for linear algebra.", "expected": "learning-plan"}
+{"id": "cap-014", "kind": "skill", "prompt": "Turn my active learning goal into a daily schedule.", "expected": "learning-plan"}
+{"id": "cap-015", "kind": "skill", "prompt": "Generate a draft plan and wait for confirmation before saving tasks.", "expected": "learning-plan"}
+{"id": "cap-016", "kind": "skill", "prompt": "Diagnose why I keep making mistakes in derivatives.", "expected": "error-diagnosis"}
+{"id": "cap-017", "kind": "skill", "prompt": "Analyze the errors in my latest probability attempt.", "expected": "error-diagnosis"}
+{"id": "cap-018", "kind": "skill", "prompt": "Explain the misconception behind this wrong matrix answer.", "expected": "error-diagnosis"}
+{"id": "cap-019", "kind": "skill", "prompt": "Find the weak concept causing my repeated practice errors.", "expected": "error-diagnosis"}
+{"id": "cap-020", "kind": "skill", "prompt": "Classify my learning mistakes and suggest targeted exercises.", "expected": "error-diagnosis"}
+{"id": "cap-021", "kind": "skill", "prompt": "Generate a weekly learning report with a progress chart.", "expected": "report-visualization"}
+{"id": "cap-022", "kind": "skill", "prompt": "Visualize my study time and practice accuracy.", "expected": "report-visualization"}
+{"id": "cap-023", "kind": "skill", "prompt": "Create a dashboard-style summary of my learning activity.", "expected": "report-visualization"}
+{"id": "cap-024", "kind": "skill", "prompt": "Export a report showing progress, weak areas, and trends.", "expected": "report-visualization"}
+{"id": "cap-025", "kind": "skill", "prompt": "Plot my recent course completion and review statistics.", "expected": "report-visualization"}
+{"id": "cap-026", "kind": "skill", "prompt": "Run the complete learning workflow from resources to questions.", "expected": "learning-workflow"}
+{"id": "cap-027", "kind": "skill", "prompt": "Start the full course pipeline and pause for each confirmation.", "expected": "learning-workflow"}
+{"id": "cap-028", "kind": "skill", "prompt": "Process this course material through extraction and practice.", "expected": "learning-workflow"}
+{"id": "cap-029", "kind": "skill", "prompt": "Create a resumable learning workflow for course 3.", "expected": "learning-workflow"}
+{"id": "cap-030", "kind": "skill", "prompt": "Run indexing, knowledge extraction, question generation, and reporting.", "expected": "learning-workflow"}
+{"id": "cap-031", "kind": "skill", "prompt": "Continue the learning workflow from its last approved step.", "expected": "learning-workflow"}
+{"id": "cap-032", "kind": "skill", "prompt": "Orchestrate resource analysis, practice, and a final report.", "expected": "learning-workflow"}
+{"id": "cap-033", "kind": "skill", "prompt": "Launch the end-to-end study workflow for this course.", "expected": "learning-workflow"}
+{"id": "cap-034", "kind": "skill", "prompt": "Resume the staged course workflow after reviewing knowledge drafts.", "expected": "learning-workflow"}
+{"id": "cap-035", "kind": "skill", "prompt": "Prepare the complete learning loop without skipping confirmations.", "expected": "learning-workflow"}
+{"id": "cap-036", "kind": "skill", "prompt": "Inspect the project files and explain this Python bug.", "expected": "coding"}
+{"id": "cap-037", "kind": "skill", "prompt": "Read the workspace configuration and propose a code fix.", "expected": "coding"}
+{"id": "cap-038", "kind": "skill", "prompt": "Run a small read-only calculation in the coding sandbox.", "expected": "coding"}
+{"id": "cap-039", "kind": "skill", "prompt": "List the files in my linked workspace before debugging.", "expected": "coding"}
+{"id": "cap-040", "kind": "skill", "prompt": "Write the requested script into the approved workspace after confirmation.", "expected": "coding"}
+{"id": "cap-041", "kind": "mcp", "prompt": "Search public web sources for a current explanation of eigenvectors.", "expected": "mcp.search_web"}
+{"id": "cap-042", "kind": "mcp", "prompt": "Use the public internet to find authoritative study references.", "expected": "mcp.search_web"}
+{"id": "cap-043", "kind": "mcp", "prompt": "Look up recent information about spaced repetition research.", "expected": "mcp.search_web"}
+{"id": "cap-044", "kind": "mcp", "prompt": "Find online sources comparing two calculus textbooks.", "expected": "mcp.search_web"}
+{"id": "cap-045", "kind": "mcp", "prompt": "Search external sources and return links with citations.", "expected": "mcp.search_web"}
+{"id": "cap-046", "kind": "mcp", "prompt": "Fetch and read this public URL: https://example.org/course.", "expected": "mcp.fetch_public_url"}
+{"id": "cap-047", "kind": "mcp", "prompt": "Open the allowed public webpage and extract its title.", "expected": "mcp.fetch_public_url"}
+{"id": "cap-048", "kind": "mcp", "prompt": "Retrieve the contents of this public documentation link.", "expected": "mcp.fetch_public_url"}
+{"id": "cap-049", "kind": "mcp", "prompt": "Read the specified external article without downloading files.", "expected": "mcp.fetch_public_url"}
+{"id": "cap-050", "kind": "mcp", "prompt": "Fetch a public source so I can cite its exact wording.", "expected": "mcp.fetch_public_url"}
+{"id": "cap-051", "kind": "mcp", "prompt": "List files in my linked desktop workspace.", "expected": "mcp.list_workspace_files"}
+{"id": "cap-052", "kind": "mcp", "prompt": "Show the directory contents of the approved workspace.", "expected": "mcp.list_workspace_files"}
+{"id": "cap-053", "kind": "mcp", "prompt": "Which files are currently available in my project folder?", "expected": "mcp.list_workspace_files"}
+{"id": "cap-054", "kind": "mcp", "prompt": "Inspect the workspace file names before I choose one.", "expected": "mcp.list_workspace_files"}
+{"id": "cap-055", "kind": "mcp", "prompt": "Give me a read-only listing of the connected files.", "expected": "mcp.list_workspace_files"}
+{"id": "cap-056", "kind": "mcp", "prompt": "Read the text of notes/limits.md from my workspace.", "expected": "mcp.read_workspace_file"}
+{"id": "cap-057", "kind": "mcp", "prompt": "Open the approved project README for inspection.", "expected": "mcp.read_workspace_file"}
+{"id": "cap-058", "kind": "mcp", "prompt": "Show me the contents of the selected local configuration file.", "expected": "mcp.read_workspace_file"}
+{"id": "cap-059", "kind": "mcp", "prompt": "Read a workspace file and summarize its relevant settings.", "expected": "mcp.read_workspace_file"}
+{"id": "cap-060", "kind": "mcp", "prompt": "Inspect the chosen source file without modifying it.", "expected": "mcp.read_workspace_file"}
+{"id": "cap-061", "kind": "mcp", "prompt": "After confirmation, write this markdown report to the approved workspace.", "expected": "mcp.write_workspace_file"}
+{"id": "cap-062", "kind": "mcp", "prompt": "Save the generated notes into an allowlisted workspace file.", "expected": "mcp.write_workspace_file"}
+{"id": "cap-063", "kind": "mcp", "prompt": "Create a new text file in the permitted project directory.", "expected": "mcp.write_workspace_file"}
+{"id": "cap-064", "kind": "mcp", "prompt": "Update the selected workspace document with these edits.", "expected": "mcp.write_workspace_file"}
+{"id": "cap-065", "kind": "mcp", "prompt": "Persist this export only after the user confirms the write.", "expected": "mcp.write_workspace_file"}
+{"id": "cap-066", "kind": "mcp", "prompt": "Run the enabled research Skill script on the approved input.", "expected": "mcp.run_skill_script"}
+{"id": "cap-067", "kind": "mcp", "prompt": "Execute the selected executable Skill with its allowed arguments.", "expected": "mcp.run_skill_script"}
+{"id": "cap-068", "kind": "mcp", "prompt": "Use the enabled Skill entrypoint to process this resource.", "expected": "mcp.run_skill_script"}
+{"id": "cap-069", "kind": "mcp", "prompt": "Run an installed Skill script after checking its permission.", "expected": "mcp.run_skill_script"}
+{"id": "cap-070", "kind": "mcp", "prompt": "Execute the approved automation Skill in its sandbox.", "expected": "mcp.run_skill_script"}
+{"id": "cap-071", "kind": "tool", "prompt": "Find the capability metadata for reading course progress.", "expected": "tool.search"}
+{"id": "cap-072", "kind": "tool", "prompt": "Which registered tool can create a learning goal?", "expected": "tool.search"}
+{"id": "cap-073", "kind": "tool", "prompt": "Discover the tool used to list today's study tasks.", "expected": "tool.search"}
+{"id": "cap-074", "kind": "tool", "prompt": "Search the capability catalog for a report generator.", "expected": "tool.search"}
+{"id": "cap-075", "kind": "tool", "prompt": "Look up an unfamiliar tool by its purpose before executing it.", "expected": "tool.search"}
+{"id": "cap-076", "kind": "tool", "prompt": "Read my current courses, goals, tasks, and practice summary.", "expected": "learning_data.read_snapshot"}
+{"id": "cap-077", "kind": "tool", "prompt": "Show a read-only snapshot of my learning workspace.", "expected": "learning_data.read_snapshot"}
+{"id": "cap-078", "kind": "tool", "prompt": "Check my recent study minutes and wrong question IDs.", "expected": "learning_data.read_snapshot"}
+{"id": "cap-079", "kind": "tool", "prompt": "Inspect the confirmed learning memories and progress.", "expected": "learning_data.read_snapshot"}
+{"id": "cap-080", "kind": "tool", "prompt": "Give the agent the current tenant-scoped learning data.", "expected": "learning_data.read_snapshot"}
+{"id": "cap-081", "kind": "tool", "prompt": "Create a new learning goal for calculus by June 30.", "expected": "agent.create_goal"}
+{"id": "cap-082", "kind": "tool", "prompt": "Set up a goal to score 90 on my upcoming exam.", "expected": "agent.create_goal"}
+{"id": "cap-083", "kind": "tool", "prompt": "Add an active study objective with 300 weekly minutes.", "expected": "agent.create_goal"}
+{"id": "cap-084", "kind": "tool", "prompt": "Establish a target for finishing linear algebra.", "expected": "agent.create_goal"}
+{"id": "cap-085", "kind": "tool", "prompt": "Save this new learning goal after I confirm it.", "expected": "agent.create_goal"}
+{"id": "cap-086", "kind": "tool", "prompt": "Generate a draft plan for my active goal.", "expected": "agent.generate_plan"}
+{"id": "cap-087", "kind": "tool", "prompt": "Create daily learning tasks from goal 4.", "expected": "agent.generate_plan"}
+{"id": "cap-088", "kind": "tool", "prompt": "Draft a schedule with 45 minutes per day.", "expected": "agent.generate_plan"}
+{"id": "cap-089", "kind": "tool", "prompt": "Turn my goal into a planned sequence of study tasks.", "expected": "agent.generate_plan"}
+{"id": "cap-090", "kind": "tool", "prompt": "Prepare a learning-plan draft for confirmation.", "expected": "agent.generate_plan"}
+{"id": "cap-091", "kind": "tool", "prompt": "Generate my learning report for the last seven days.", "expected": "agent.generate_report"}
+{"id": "cap-092", "kind": "tool", "prompt": "Create a report snapshot of my recent study activity.", "expected": "agent.generate_report"}
+{"id": "cap-093", "kind": "tool", "prompt": "Produce the weekly progress report.", "expected": "agent.generate_report"}
+{"id": "cap-094", "kind": "tool", "prompt": "Summarize my learning data as a report artifact.", "expected": "agent.generate_report"}
+{"id": "cap-095", "kind": "tool", "prompt": "Make the report requested by the learner.", "expected": "agent.generate_report"}
+{"id": "cap-096", "kind": "tool", "prompt": "Start the resumable resource-to-report learning workflow.", "expected": "agent.start_workflow"}
+{"id": "cap-097", "kind": "tool", "prompt": "Run the complete learning pipeline for course 2.", "expected": "agent.start_workflow"}
+{"id": "cap-098", "kind": "tool", "prompt": "Begin indexing, extraction, questions, and reporting as one workflow.", "expected": "agent.start_workflow"}
+{"id": "cap-099", "kind": "tool", "prompt": "Save my confirmed preference to study in short daily sessions.", "expected": "agent.remember"}
+{"id": "cap-100", "kind": "tool", "prompt": "Remember that my weak point is integration by parts.", "expected": "agent.remember"}

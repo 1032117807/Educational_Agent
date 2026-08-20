@@ -112,3 +112,50 @@ def test_agent_memory_requires_confirmation_and_supports_soft_delete(tmp_path):
     service.delete_memory(item.id)
     assert service.context() == []
     database.close()
+
+
+def test_agent_memory_conflict_is_update_or_noop_not_duplicate(tmp_path):
+    from app.database import Database
+
+    database = Database(f"sqlite:///{(tmp_path / 'memory-conflict.db').as_posix()}")
+    database.create_schema()
+    service = AgentMemoryService(database)
+    first = service.remember(scope="long_term", category="learning_pace", content={"minutes": 60}, confirmed=True)
+
+    assert service.decide_candidate(scope="long_term", category="learning_pace", content={"minutes": 60}).action == "NOOP"
+    decision = service.decide_candidate(scope="long_term", category="learning_pace", content={"minutes": 30})
+    assert decision.action == "UPDATE"
+    assert decision.existing_id == first.id
+    second = service.remember(scope="long_term", category="learning_pace", content={"minutes": 30}, confirmed=True)
+    assert second.id != first.id
+    assert len(service.context()) == 1
+    database.close()
+
+
+def test_memory_conflict_feature_flag_preserves_existing_records(tmp_path):
+    from app.database import Database
+
+    database = Database(f"sqlite:///{(tmp_path / 'memory-no-conflict-resolution.db').as_posix()}")
+    database.create_schema()
+    service = AgentMemoryService(database, conflict_resolution_enabled=False)
+
+    service.remember(scope="long_term", category="learning_pace", content={"minutes": 60}, confirmed=True)
+    service.remember(scope="long_term", category="learning_pace", content={"minutes": 30}, confirmed=True)
+
+    assert len(service.context()) == 2
+    database.close()
+
+
+def test_agent_memory_searches_episodic_messages_on_demand(tmp_path):
+    from app.database import Database
+    from app.services.agent_sessions import AgentSessionService
+
+    database = Database(f"sqlite:///{(tmp_path / 'episodic.db').as_posix()}")
+    database.create_schema()
+    session = AgentSessionService(database).create_session("history")
+    AgentSessionService(database).append_message(session.id, "user", "I prefer morning study")
+
+    results = AgentMemoryService(database).search_episodic("morning study")
+
+    assert results[0]["session_id"] == session.id
+    database.close()

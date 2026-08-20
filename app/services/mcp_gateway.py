@@ -9,6 +9,7 @@ from typing import Any
 
 from app.services.agent_permissions import AgentPermissionService
 from app.services.cancellation import CancellationToken, OperationCancelled
+from app.agent_runtime.observations import observe_failure, observe_success
 
 
 class MCPGateway:
@@ -53,6 +54,19 @@ class MCPGateway:
         return asyncio.run(
             self._call(name, arguments, confirmed=confirmed, cancellation=cancellation)
         )
+
+    def execute_observed(
+        self, name: str, arguments: dict[str, Any], *, confirmed: bool,
+        cancellation: CancellationToken | None = None,
+    ) -> dict[str, Any]:
+        try:
+            return observe_success(
+                f"mcp.{name.removeprefix('mcp.')}",
+                self.execute(name, arguments, confirmed=confirmed, cancellation=cancellation),
+                source="mcp",
+            )
+        except Exception as exc:
+            return observe_failure(f"mcp.{name.removeprefix('mcp.')}", exc)
 
     async def _call(
         self,

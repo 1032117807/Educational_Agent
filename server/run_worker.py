@@ -5,7 +5,7 @@ from collections.abc import Callable
 
 from server.config import get_server_settings
 from server.db import session_factory
-from server.factory import create_ai_feature_handler, create_index_resource_handler, create_learning_agent_handler, create_question_generation_handler, create_rag_retrieval_handler
+from server.factory import create_ai_feature_handler, create_index_resource_handler, create_learning_agent_handler, create_question_generation_handler, create_rag_retrieval_handler, create_vocabulary_handler
 from server.jobs import JobQueue
 from server.worker import run_once
 
@@ -30,6 +30,7 @@ def main() -> int:
         "index_resource": lazy_handler(lambda: create_index_resource_handler(settings)),
         "rag_question": lazy_handler(lambda: create_rag_retrieval_handler(settings)),
         "generate_questions": lazy_handler(lambda: create_question_generation_handler(settings)),
+        "generate_vocabulary": lazy_handler(lambda: create_vocabulary_handler(settings)),
         "ai_feature": lazy_handler(lambda: create_ai_feature_handler(settings)),
         "learning_agent": lazy_handler(lambda: create_learning_agent_handler(settings)),
     }

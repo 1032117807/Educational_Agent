@@ -16,7 +16,14 @@ returns streamed tool events. This preserves the same Agent/Skill/MCP protocol
 without giving a shared server host-file permissions.
 
 The current SaaS implementation automatically exposes tenant learning data.
-The next implementation step is a `cloud_sandbox` service that provisions a
-per-session writable workspace, invokes the existing `learning_agent_mcp.py`
-tools inside that sandbox, and publishes tool events into the existing SSE
-conversation stream.
+It also exposes the same durable Agent actions used by the desktop client:
+creating goals, generating plan/report jobs, creating resumable workflows and
+saving confirmed memories. They share the `TOOL_CATALOG` action names,
+confirmation requirement and `AgentToolCall` audit trail. The cloud executor
+uses tenant-scoped data and a per-session workspace; the desktop executor uses
+the local database/workspace under the same capability contract.
+
+`desktop.*` tools are shown to both clients but remain linked-client
+capabilities. In Web they are queued for the requested `companion_id`; a
+browser cannot access a local disk or run local code unless the signed-in
+desktop companion polls, executes and returns that call.

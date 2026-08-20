@@ -11,7 +11,10 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from sqlalchemy.orm import Session
 
 from app.models import AICitation, AIRun
+from app.agent_runtime import AgentBudget
+from ai.retrieval.agentic import AgenticRAG
 from server.rag_retriever import TenantPgVectorRetriever
+from ai.gateways.rerank import Reranker
 from server.tenant_session import set_session_tenant
 
 
@@ -32,6 +35,11 @@ def retrieve_rag_evidence(
     chat_model: BaseChatModel | None = None,
     chat_provider: str = "",
     chat_model_name: str = "",
+    reranker: Reranker | None = None,
+    rerank_candidate_limit: int = 24,
+    query_rewrite_enabled: bool = True,
+    hybrid_retrieval_enabled: bool = True,
+    agentic_rag_enabled: bool = True,
 ) -> dict[str, object]:
     """Persist tenant-scoped evidence and optionally generate a grounded answer."""
     tenant_id = str(payload["tenant_id"])
@@ -46,8 +54,22 @@ def retrieve_rag_evidence(
             embeddings=embeddings,
             embedding_version=embedding_version,
             dimensions=dimensions,
+            reranker=reranker,
+            rerank_candidate_limit=rerank_candidate_limit,
+            query_rewrite_enabled=query_rewrite_enabled,
+            hybrid_retrieval_enabled=hybrid_retrieval_enabled,
         )
-        hits = retriever.retrieve(question, tenant_id=tenant_id, course_id=int(course_id) if course_id is not None else None)
+        retrieval_filters = {
+            "tenant_id": tenant_id,
+            "course_id": int(course_id) if course_id is not None else None,
+        }
+        if agentic_rag_enabled:
+            hits, retrieval_observations = AgenticRAG(
+                retriever.retrieve, budget=AgentBudget(max_rag_searches=4),
+            ).search(question, **retrieval_filters)
+        else:
+            hits = retriever.retrieve(question, **retrieval_filters)
+            retrieval_observations = []
         answer = ""
         generation_status = "evidence_only"
         if chat_model is not None and hits:
@@ -79,6 +101,7 @@ def retrieve_rag_evidence(
                 "answer": answer,
                 "evidence_count": len(hits),
                 "chunk_ids": [hit.chunk_id for hit in hits],
+                "retrieval_observations": [item.__dict__ for item in retrieval_observations],
             }, ensure_ascii=False),
             course_id=int(course_id) if course_id is not None else None,
             finished_at=datetime.now(),
@@ -101,4 +124,5 @@ def retrieve_rag_evidence(
             "answer": answer,
             "evidence_count": len(hits),
             "chunk_ids": [hit.chunk_id for hit in hits],
+            "retrieval_observations": [item.__dict__ for item in retrieval_observations],
         }

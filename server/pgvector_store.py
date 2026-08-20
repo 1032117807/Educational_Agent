@@ -16,7 +16,7 @@ class VectorHit:
 class PgVectorStore:
     """Tenant-scoped pgvector storage used by workers and RAG retrieval."""
 
-    def __init__(self, session: Session, *, dimensions: int = 384) -> None:
+    def __init__(self, session: Session, *, dimensions: int = 512) -> None:
         self.session = session
         self.dimensions = dimensions
 
@@ -55,20 +55,50 @@ class PgVectorStore:
         )
 
     def search(
-        self, *, tenant_id: str, embedding_version: str, query_embedding: Sequence[float], limit: int
+        self, *, tenant_id: str, embedding_version: str, query_embedding: Sequence[float], limit: int,
+        course_id: int | None = None, resource_ids: Sequence[int] | None = None,
     ) -> list[VectorHit]:
         self._validate_embedding(query_embedding)
+        predicates = [
+            "tenant_id = :tenant_id",
+            "embedding_version = :embedding_version",
+        ]
+        params: dict[str, object] = {
+            "tenant_id": tenant_id,
+            "embedding_version": embedding_version,
+            "embedding": self._vector_literal(query_embedding),
+            "limit": limit,
+        }
+        if course_id is not None:
+            predicates.append(
+                "EXISTS (SELECT 1 FROM document_chunks dc "
+                "WHERE dc.id = document_embeddings.chunk_id "
+                "AND dc.tenant_id = :tenant_id AND dc.course_id = :course_id)"
+            )
+            params["course_id"] = course_id
+        if resource_ids:
+            placeholders = []
+            for index, resource_id in enumerate(resource_ids):
+                key = f"resource_id_{index}"
+                placeholders.append(f":{key}")
+                params[key] = int(resource_id)
+            predicates.append(
+                "EXISTS (SELECT 1 FROM document_chunks dc "
+                "WHERE dc.id = document_embeddings.chunk_id "
+                "AND dc.tenant_id = :tenant_id "
+                f"AND dc.resource_id IN ({', '.join(placeholders)}))"
+            )
         rows = self.session.execute(
             text(
-                """
+                f"""
                 SELECT chunk_id, embedding <=> CAST(:embedding AS vector) AS distance
                 FROM document_embeddings
-                WHERE tenant_id = :tenant_id AND embedding_version = :embedding_version
+                WHERE {' AND '.join(predicates)}
                 ORDER BY embedding <=> CAST(:embedding AS vector)
                 LIMIT :limit
                 """
             ),
-            {"tenant_id": tenant_id, "embedding_version": embedding_version, "embedding": self._vector_literal(query_embedding), "limit": limit},
+            params,
         )
         return [VectorHit(chunk_id=int(row.chunk_id), distance=float(row.distance)) for row in rows]
 

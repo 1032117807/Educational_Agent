@@ -172,7 +172,7 @@ class AgentWorker(QRunnable):
                 self.signals.tool_event.emit(self.tool_name or "tool", "running", "执行通用工具")
                 tool_name = self.tool_name or "tool"
                 try:
-                    result = service.execute_tool(
+                    result = service.execute_tool_runtime(
                         tool_name,
                         self.tool_arguments,
                         confirmed=self.confirmed,

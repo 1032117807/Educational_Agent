@@ -28,6 +28,8 @@ from app.services.meta_coding import MetaCodeProposal, MetaCodingService, MetaEx
 from app.services.course_progress import CourseProgressService
 from app.services.learning_snapshot import LearningSnapshotService
 from ai.reports import LearningReportService, render_learning_report
+from ai.prompts import AGENT_PROMPT_VERSION, AgentPromptRenderer
+from app.agent_runtime import AgentBudget, AgentRuntime, AgentRuntimeState, AgentTurn
 
 
 class AgentDecision(BaseModel):
@@ -95,7 +97,7 @@ class GeneratedReport:
     end_date: date
 
 
-PROMPT = ChatPromptTemplate.from_messages([
+LEGACY_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """
 你是桌面学习应用里的通用学习 Agent。你只能根据提供的本地学习数据回答或操作。
 你的职责是解释学习状态、回答问题、调用项目工具，或把用户带到正确的功能页面。
@@ -131,6 +133,10 @@ question_count、question_difficulty 和 course_id；生成后应用会把题目
 """.strip()),
 ])
 
+# The legacy constant stays available for old plug-ins that imported it, but
+# all service calls use the versioned, composable renderer below.
+PROMPT = AgentPromptRenderer().render()
+
 
 class LearningPlanAgentService:
     def __init__(
@@ -147,6 +153,11 @@ class LearningPlanAgentService:
         memory_service: AgentMemoryService | None = None,
         research_factory: Callable[[], ResearchCurationService] | None = None,
         meta_coding_factory: Callable[[], MetaCodingService] | None = None,
+        budget_factory: Callable[[], AgentBudget] | None = None,
+        runtime_v2_enabled: bool = True,
+        skill_progressive_disclosure: bool = True,
+        context_status_bar: bool = True,
+        memory_retrieval_enabled: bool = True,
     ) -> None:
         self.database = database
         try:
@@ -170,6 +181,12 @@ class LearningPlanAgentService:
         self.memory_service = memory_service or AgentMemoryService(database)
         self.research_factory = research_factory
         self.meta_coding_factory = meta_coding_factory
+        self.prompt_version = AGENT_PROMPT_VERSION
+        self.budget_factory = budget_factory or AgentBudget
+        self.runtime_v2_enabled = runtime_v2_enabled
+        self.skill_progressive_disclosure = skill_progressive_disclosure
+        self.context_status_bar = context_status_bar
+        self.memory_retrieval_enabled = memory_retrieval_enabled
 
     def context(self) -> dict:
         progress_by_course = {
@@ -195,6 +212,19 @@ class LearningPlanAgentService:
                     )
                 )
             ))
+        all_tools = [
+            {"name": item.name, "description": item.description, "mutates_data": item.mutates_data}
+            for item in (self.tool_registry.list() if self.tool_registry else [])
+        ] + (self.mcp_gateway.tool_specs() if self.mcp_gateway else [])
+        core_names = {
+            "course.list", "course.get", "study_task.list_today", "review.list_due",
+            "filesystem.list_directory", "filesystem.read_text", "mcp.search_web",
+            "mcp.read_workspace_file",
+        }
+        core_tools = [item for item in all_tools if item["name"] in core_names]
+        core_tools.append({
+            "name": "tool.search", "description": "Find additional tool metadata by purpose or capability", "mutates_data": False,
+        })
         return {
             "today": date.today().isoformat(),
             "active_goals": [
@@ -231,16 +261,46 @@ class LearningPlanAgentService:
                     sum(max(0, item.duration_minutes) for item in recent_sessions) / 7, 1
                 ),
             },
-            "available_tools": [
-                {"name": item.name, "description": item.description,
-                 "mutates_data": item.mutates_data}
-                for item in (self.tool_registry.list() if self.tool_registry else [])
-            ] + (self.mcp_gateway.tool_specs() if self.mcp_gateway else []),
-            "skills": self.skill_catalog.descriptions(),
-            # 只注入用户确认过的记忆，不注入完整聊天或隐藏推理。
-            "confirmed_memories": self.memory_service.context_for_courses(
-                [item.id for item in courses]
+            "available_tools": core_tools,
+            "skills": (
+                self.skill_catalog.skill_metadata()
+                if self.skill_progressive_disclosure else self.skill_catalog.list_skills()
             ),
+            # 只注入用户确认过的记忆，不注入完整聊天或隐藏推理。
+            "confirmed_memories": (
+                self.memory_service.context_for_courses([item.id for item in courses])
+                if self.memory_retrieval_enabled else []
+            ),
+        }
+
+    def discover_tools(self, query: str, *, limit: int = 8) -> list[dict[str, object]]:
+        """Second-stage desktop tool disclosure; does not execute a tool."""
+        candidates = [
+            {"name": item.name, "description": item.description, "mutates_data": item.mutates_data}
+            for item in (self.tool_registry.list() if self.tool_registry else [])
+        ] + (self.mcp_gateway.tool_specs() if self.mcp_gateway else [])
+        terms = {term.casefold() for term in query.split() if term.strip()}
+        scored = [
+            (sum(term in f"{item['name']} {item['description']}".casefold() for term in terms), item)
+            for item in candidates
+        ]
+        return [item for score, item in sorted(scored, key=lambda pair: (-pair[0], str(pair[1]["name"]))) if score or not terms][:max(1, limit)]
+
+    def prompt_payload(self, message: str, history: list[dict[str, str]] | None) -> dict[str, str]:
+        """Build bounded request context without exposing complete Skill bodies."""
+        context = self.context()
+        if self.context_status_bar:
+            state = AgentRuntimeState(goal=message.strip())
+            state.begin_phase("decision")
+            state.add_completed_step("read_learning_snapshot")
+            state.add_todo("select_next_action")
+            context["agent_status"] = state.render_status(self.budget_factory())
+        if self.runtime_v2_enabled:
+            context["prompt_version"] = self.prompt_version
+        return {
+            "context": json.dumps(context, ensure_ascii=False),
+            "history": json.dumps((history or [])[-10:], ensure_ascii=False),
+            "message": message.strip(),
         }
 
     def respond(
@@ -270,11 +330,8 @@ class LearningPlanAgentService:
             ))
         if not message.strip():
             raise ValueError("消息不能为空")
-        prompt = PROMPT.invoke({
-            "context": json.dumps(self.context(), ensure_ascii=False),
-            "history": json.dumps((history or [])[-10:], ensure_ascii=False),
-            "message": message.strip(),
-        })
+        renderer_prompt = PROMPT if self.runtime_v2_enabled else LEGACY_PROMPT
+        prompt = renderer_prompt.invoke(self.prompt_payload(message, history))
         decision = self._stream_decision(prompt, progress)
         if decision.action == "navigate" and decision.route is None:
             decision.action = "chat"
@@ -343,11 +400,8 @@ class LearningPlanAgentService:
             ))
         if not message.strip():
             raise ValueError("消息不能为空")
-        prompt = PROMPT.invoke({
-            "context": json.dumps(self.context(), ensure_ascii=False),
-            "history": json.dumps((history or [])[-10:], ensure_ascii=False),
-            "message": message.strip(),
-        })
+        renderer_prompt = PROMPT if self.runtime_v2_enabled else LEGACY_PROMPT
+        prompt = renderer_prompt.invoke(self.prompt_payload(message, history))
         astream = getattr(self.model, "astream", None)
         if callable(astream):
             decision = await self._astream_decision(
@@ -611,6 +665,18 @@ class LearningPlanAgentService:
         confirmed: bool = False,
         cancellation: CancellationToken | None = None,
     ) -> dict:
+        if name == "tool.search":
+            return {
+                "capabilities": self.discover_tools(
+                    str(arguments.get("query", "")),
+                    limit=int(arguments.get("limit", 8)),
+                )
+            }
+        if name == "skill.load":
+            skill_name = str(arguments.get("name", arguments.get("skill_name", ""))).strip()
+            if not skill_name:
+                raise ValueError("Skill name is required")
+            return {"skill": skill_name, "instructions": self.skill_catalog.load_skill(skill_name)}
         if name.startswith("mcp."):
             if self.mcp_gateway is None:
                 raise ValueError("MCP gateway is not initialized")
@@ -635,6 +701,65 @@ class LearningPlanAgentService:
         if name.startswith("filesystem.") and not self.skill_catalog.is_enabled("coding"):
             raise PermissionError("代码协作 Skill 已禁用，不能访问工作区文件")
         return self.tool_registry.execute(name, arguments, confirmed=confirmed)
+
+    def execute_tool_runtime(
+        self,
+        name: str,
+        arguments: dict,
+        *,
+        confirmed: bool = False,
+        cancellation: CancellationToken | None = None,
+    ) -> dict:
+        """Run one desktop capability through the shared observation loop.
+
+        The UI still owns the existing risk dialog.  Once that dialog grants
+        confirmation, the same local/MCP executor runs inside AgentRuntime so
+        Desktop and Web persist equivalent validation and observation data.
+        """
+        def decide(context: dict) -> AgentTurn:
+            observations = context.get("observations", [])
+            if not observations:
+                return AgentTurn(
+                    decision_summary="Execute the selected desktop capability",
+                    action="tool", tool_name=name, arguments=arguments,
+                )
+            return AgentTurn(
+                decision_summary="Validate the tool observation",
+                action="final", answer="",
+            )
+
+        runtime = AgentRuntime(
+            model=decide,
+            executor=lambda tool_name, tool_args: self.execute_tool(
+                tool_name, tool_args, confirmed=confirmed, cancellation=cancellation,
+            ),
+            budget=self.budget_factory(),
+        )
+        run = runtime.run(
+            f"Execute {name}",
+            base_context={"client": "desktop", "selected_capability": name},
+            confirmation_granted=confirmed,
+        )
+        observations = run.trajectory.tool_observations()
+        observation = observations[-1] if observations else {
+            "tool_name": name,
+            "ok": False,
+            "data": {"confirmation_required": run.status == "waiting_confirmation"},
+            "summary": run.answer,
+            "error": None,
+            "meta": {"source": "desktop_runtime", "latency_ms": None, "truncated": False, "artifact_ref": None},
+        }
+        return {
+            **observation,
+            "runtime": {
+                "status": run.status,
+                "tool_result_artifacts": run.tool_result_artifacts,
+                "trajectory": [
+                    {"type": event.event_type, **event.payload}
+                    for event in run.trajectory.events
+                ],
+            },
+        }
 
     def generate_questions(
         self,

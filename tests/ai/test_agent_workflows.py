@@ -75,6 +75,22 @@ def _accept_extracted_draft(database, course_id):
         ))
 
 
+def test_specialist_result_exposes_structured_handoff_without_internal_trace() -> None:
+    result = SpecialistResult(
+        "research", "found evidence", {"course_id": 2},
+        evidence=({"chunk_id": 7},), artifacts=("report.md",),
+        validation=({"citation_valid": True},), missing_information=("exam date",),
+        confidence=1.2, next_recommendation="ask for the exam date",
+    )
+
+    handoff = result.handoff()
+
+    assert handoff["evidence"] == [{"chunk_id": 7}]
+    assert handoff["artifacts"] == ["report.md"]
+    assert handoff["confidence"] == 1.0
+    assert "traceback" not in handoff
+
+
 def test_workflow_persists_analysis_step_and_can_be_cancelled(tmp_path):
     database = Database(f"sqlite:///{(tmp_path / 'workflow.db').as_posix()}")
     database.create_schema()

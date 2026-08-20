@@ -1,0 +1,5 @@
+{
+  "rag": {"candidate_dataset": "rag_candidates.jsonl", "gold_dataset": "rag_gold.jsonl", "minimum_records": 150, "verified_records": 0, "labeling_method": "human review required"},
+  "memory": {"candidate_dataset": "memory_candidates.jsonl", "gold_dataset": "memory_gold.jsonl", "minimum_records": 100, "verified_records": 0, "labeling_method": "human review required"},
+  "skills": {"candidate_dataset": "skill_candidates.jsonl", "gold_dataset": "skill_gold.jsonl", "minimum_records": 80, "verified_records": 0, "labeling_method": "human review required"}
+}

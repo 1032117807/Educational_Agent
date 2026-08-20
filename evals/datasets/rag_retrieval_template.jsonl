@@ -1,0 +1,1 @@
+{"id":"rag-001","query":"What is a derivative?","relevant_chunk_ids":[101],"reference_answer":"A derivative is an instantaneous rate of change.","category":"math","difficulty":"easy","metadata":{"source":"human-annotated","version":"v1"}}

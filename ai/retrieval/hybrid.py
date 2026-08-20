@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from sqlalchemy import select
 
@@ -16,6 +16,7 @@ from ai.retrieval.vector_store import (
 )
 from app.database import Database
 from app.models import DocumentChunk, DocumentIndex, ResourceFile
+from ai.gateways.rerank import Reranker
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,9 @@ class RetrievalHit:
     semantic_distance: float | None
 
     metadata: dict[str, object] = field(default_factory=dict)
+    rerank_score: float | None = None
+    final_rank: int | None = None
+    retrieval_stage: str = "rrf"
 
     @property
     def citation_label(self) -> str:
@@ -61,6 +65,8 @@ class HybridRetriever:
         rrf_k: int = 60,
         keyword_weight: float = 1.0,
         semantic_weight: float = 1.0,
+        reranker: Reranker | None = None,
+        rerank_candidate_limit: int = 24,
     ) -> None:
         if rrf_k <= 0:
             raise ValueError("rrf_k 必须大于 0")
@@ -71,6 +77,8 @@ class HybridRetriever:
         self.rrf_k = rrf_k
         self.keyword_weight = keyword_weight
         self.semantic_weight = semantic_weight
+        self.reranker = reranker
+        self.rerank_candidate_limit = rerank_candidate_limit
 
     def retrieve(
         self,
@@ -131,7 +139,7 @@ class HybridRetriever:
                 -scores[chunk_id],
                 chunk_id,
             ),
-        )[:limit]
+        )[:max(limit, self.rerank_candidate_limit if self.reranker else limit)]
 
         chunks = self._load_chunks(ranked_ids)
         chunk_by_id = {chunk.id: chunk for chunk in chunks}
@@ -193,6 +201,39 @@ class HybridRetriever:
                 )
             )
 
+        if self.reranker and results:
+            try:
+                candidates = results[:self.rerank_candidate_limit]
+                rerank_scores = self.reranker.rerank(
+                    query,
+                    [hit.retrieval_text or hit.content for hit in candidates],
+                    limit=len(candidates),
+                )
+                score_by_chunk = {
+                    hit.chunk_id: rerank_scores[index]
+                    for index, hit in enumerate(candidates)
+                }
+                results = [
+                    item[1]
+                    for item in sorted(
+                        enumerate(candidates),
+                        key=lambda item: (-rerank_scores[item[0]], item[0]),
+                    )
+                ] + results[len(candidates):]
+                results = [
+                    replace(
+                        hit,
+                        rerank_score=score_by_chunk.get(hit.chunk_id),
+                        final_rank=index + 1,
+                        retrieval_stage="rerank",
+                    )
+                    for index, hit in enumerate(results[:limit])
+                ]
+            except Exception:
+                logger.exception("Rerank failed; using RRF order")
+                results = [replace(hit, final_rank=index + 1) for index, hit in enumerate(results[:limit])]
+        else:
+            results = [replace(hit, final_rank=index + 1) for index, hit in enumerate(results[:limit])]
         return results
 
 

@@ -123,6 +123,23 @@ def test_langchain_document_contains_citation_metadata() -> None:
     assert langchain_document.metadata["location_label"] == "第 1 页"
 
 
+def test_retrieval_text_includes_context_but_preserves_original_citation_content() -> None:
+    section = ParsedSection(
+        content="Derivative definition",
+        source_path=Path("calculus.pdf"), source_name="calculus.pdf", file_type="pdf",
+        location_label="page 84", section_title="Derivatives",
+        metadata={"course_name": "Calculus", "parent_heading": "Chapter 3"},
+    )
+    chunk = CitationAwareSplitter(chunk_size=300, chunk_overlap=50).split_document(
+        ParsedDocument(Path("calculus.pdf"), "pdf", "test", (section,))
+    )[0]
+
+    assert chunk.content == "Derivative definition"
+    assert "Document: calculus.pdf" in chunk.retrieval_text
+    assert "Course: Calculus" in chunk.retrieval_text
+    assert "Content: Derivative definition" in chunk.retrieval_text
+
+
 @pytest.mark.parametrize(
     ("chunk_size", "chunk_overlap"),
     [

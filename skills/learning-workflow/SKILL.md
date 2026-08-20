@@ -1,6 +1,11 @@
-# Learning Workflow
+---
+name: learning-workflow
+description: >
+  Guide a confirmation-gated flow from imported resources through drafts, practice, and reports.
+version: 1.1.0
+---
 
-Version: 1.0.0
+# Workflow
 
 Keep a human confirmation point before every state-changing workflow step. Knowledge
 point and question drafts remain drafts until reviewed. Reports must name their data

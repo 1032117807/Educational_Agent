@@ -16,6 +16,8 @@ services:
     command: python -m uvicorn server.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
@@ -50,6 +52,18 @@ services:
         condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
+
+  agent-sandbox:
+    build:
+      context: .
+      dockerfile: docker/agent-sandbox/Dockerfile
+    image: personal_learning_desktop-agent-sandbox:latest
+    command: ["-I", "-c", "import time; time.sleep(86400)"]
+    network_mode: none
+    read_only: true
+    mem_limit: 128m
+    pids_limit: 64
+    restart: "no"
 
   migrate:
     build:

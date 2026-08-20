@@ -1,0 +1,1 @@
+{"case_id":"memory-001","old":{"category":"learning_pace","content":{"minutes":60}},"new":{"category":"learning_pace","content":{"minutes":30}},"expected":"UPDATE","source":"harness-v2-contract"}

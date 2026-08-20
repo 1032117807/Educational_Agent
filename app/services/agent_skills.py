@@ -48,15 +48,18 @@ class AgentSkillCatalog:
         for path in sorted(self.root.glob("*/SKILL.md")):
             name = path.parent.name
             text = path.read_text(encoding="utf-8").strip()
+            frontmatter = self._frontmatter(text)
             manifest = self._manifest(path.parent)
             metadata = DEFAULT_SKILL_METADATA.get(name, {})
             config = saved.get(name, {})
             result.append({
                 "name": name,
                 "display_name": metadata.get("display_name", name),
-                "version": self._version(text),
-                "description": self._description(text),
-                "instructions": text[:4000],
+                "version": str(frontmatter.get("version") or self._version(text)),
+                "description": str(frontmatter.get("description") or self._description(text)),
+                # This is deliberately retained for the explicit load_skill
+                # API and management UI. It is never included in Agent context.
+                "instructions": text,
                 "permissions": list(config.get("permissions", metadata.get("permissions", []))),
                 "enabled": bool(config.get("enabled", True)),
                 "executable": bool(manifest.get("entrypoint")),
@@ -65,11 +68,29 @@ class AgentSkillCatalog:
         return result
 
     def descriptions(self) -> list[dict[str, str]]:
+        """Compatibility name for the first, metadata-only disclosure layer."""
+        return self.skill_metadata()
+
+    def skill_metadata(self) -> list[dict[str, object]]:
+        """Expose only enough information for the Agent to select a Skill."""
         return [
-            {"name": str(item["name"]), "instructions": str(item["instructions"]),
-             "version": str(item["version"]), "permissions": ", ".join(item["permissions"])}
+            {
+                "name": item["name"],
+                "description": item["description"],
+                "version": item["version"],
+                "permissions": item["permissions"],
+            }
             for item in self.list_skills() if item["enabled"]
         ]
+
+    def load_skill(self, name: str) -> str:
+        """Second disclosure layer, used only through an explicit skill.load call."""
+        for item in self.list_skills():
+            if item["name"] == name:
+                if not item["enabled"]:
+                    raise PermissionError(f"Skill is disabled: {name}")
+                return str(item["instructions"])
+        raise ValueError(f"Unknown Skill: {name}")
 
     def update(self, name: str, *, enabled: bool, permissions: list[str]) -> None:
         if not any(item["name"] == name for item in self.list_skills()):
@@ -129,6 +150,38 @@ class AgentSkillCatalog:
         return match.group(1).strip() if match else "1.0.0"
 
     @staticmethod
+    def _frontmatter(text: str) -> dict[str, str]:
+        match = re.match(r"^---\s*\n(?P<body>.*?)\n---\s*(?:\n|$)", text, re.DOTALL)
+        if match is None:
+            return {}
+        fields: dict[str, str] = {}
+        lines = match.group("body").splitlines()
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            key_match = re.match(r"^(name|description|version):\s*(.*)$", line, re.I)
+            if key_match is None:
+                index += 1
+                continue
+            key, value = key_match.group(1).lower(), key_match.group(2).strip()
+            if value in {">", "|"}:
+                index += 1
+                continuation: list[str] = []
+                while index < len(lines) and (lines[index].startswith(" ") or lines[index].startswith("\t")):
+                    continuation.append(lines[index].strip())
+                    index += 1
+                value = " ".join(continuation)
+                fields[key] = value
+                continue
+            fields[key] = value.strip('"\'')
+            index += 1
+        return fields
+
+    @staticmethod
     def _description(text: str) -> str:
         lines = [line.strip() for line in text.splitlines()]
-        return next((line for line in lines if line and not line.startswith("#")), "")[:240]
+        return next((
+            line for line in lines
+            if line and not line.startswith("#") and not line.lower().startswith("version:")
+            and line != "---" and not re.match(r"^(name|description|permissions):", line, re.I)
+        ), "")[:240]

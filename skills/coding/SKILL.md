@@ -1,6 +1,11 @@
-# Coding
+---
+name: coding
+description: >
+  Safely inspect, propose, and validate workspace code changes under sandbox and confirmation constraints.
+version: 1.1.0
+---
 
-Version: 1.0.0
+# Workflow
 
 Read relevant files before proposing a modification. Explain files, risks, and test
 commands before requesting `mcp.write_workspace_file`. Never modify .env, .git,

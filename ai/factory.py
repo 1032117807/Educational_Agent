@@ -31,7 +31,7 @@ from ai.retrieval import (
 )
 
 from ai.chains import GroundedQAService, KnowledgeExtractionService
-from ai.gateways import create_chat_model
+from ai.gateways import create_chat_model, create_reranker
 
 from ai.agents import LearningOrchestrator, LearningPlanAgentService
 
@@ -61,6 +61,7 @@ def create_resource_indexing_pipeline(
         splitter=CitationAwareSplitter(
             chunk_size=ai_settings.chunk_size,
             chunk_overlap=ai_settings.chunk_overlap,
+            contextual_retrieval_enabled=ai_settings.contextual_retrieval_enabled,
         ),
         embedding_model=ai_settings.embedding_model,
     )
@@ -129,6 +130,8 @@ def create_hybrid_retriever(
         database=database,
         keyword_index=SQLiteKeywordIndex(database),
         vector_index=vectors,
+        reranker=create_reranker(ai_settings) if ai_settings.local_reranker_enabled else None,
+        rerank_candidate_limit=ai_settings.rerank_candidate_limit,
     )
 
 
@@ -281,6 +284,7 @@ def create_learning_plan_agent_service(
     *, database: Database, app_settings: AppSettings, tool_registry=None,
     skill_catalog: AgentSkillCatalog | None = None,
 ) -> LearningPlanAgentService:
+    from app.agent_runtime import AgentBudget
     ai_settings = get_ai_settings()
     return LearningPlanAgentService(
         database=database,
@@ -299,7 +303,10 @@ def create_learning_plan_agent_service(
         skill_catalog=skill_catalog or AgentSkillCatalog(
             state_path=app_settings.data_dir / "agent_skills.json"
         ),
-        memory_service=AgentMemoryService(database),
+        memory_service=AgentMemoryService(
+            database,
+            conflict_resolution_enabled=ai_settings.memory_conflict_resolution_enabled,
+        ),
         research_factory=lambda: create_research_curation_service(
             database=database, app_settings=app_settings
         ),
@@ -310,6 +317,19 @@ def create_learning_plan_agent_service(
             )),
             skills_dir=Path(__file__).resolve().parents[1] / "skills",
         ),
+        budget_factory=lambda: AgentBudget(
+            max_iterations=app_settings.agent_max_iterations,
+            max_tool_calls=app_settings.agent_max_tool_calls,
+            max_same_tool_retries=app_settings.agent_max_same_tool_retries,
+            max_rag_searches=app_settings.agent_max_rag_searches,
+            max_subagents=app_settings.agent_max_subagents,
+            max_context_tokens=app_settings.agent_max_context_tokens,
+            max_tool_result_chars=app_settings.agent_max_tool_result_chars,
+        ),
+        runtime_v2_enabled=app_settings.agent_runtime_v2,
+        skill_progressive_disclosure=app_settings.skill_progressive_disclosure,
+        context_status_bar=app_settings.context_status_bar,
+        memory_retrieval_enabled=ai_settings.memory_retrieval_enabled,
     )
 
 

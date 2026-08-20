@@ -20,5 +20,11 @@ pgvector>=0.3,<1.0
 boto3>=1.35,<2.0
 redis>=5.0,<7.0
 python-multipart>=0.0.9,<1.0
+requests>=2.31,<3.0
+docker>=7.0,<8.0
 PyJWT>=2.9,<3.0
 pwdlib[argon2]>=0.2,<1.0
+# Local CPU OCR fallback for scanned PDFs. PaddleOCR downloads model weights
+# into its cache on first use when no model directory is mounted.
+paddlepaddle>=3.0,<4.0
+paddleocr>=3.0,<4.0

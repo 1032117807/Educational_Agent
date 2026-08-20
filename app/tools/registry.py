@@ -11,6 +11,7 @@ from app.core.config import AppSettings
 from app.database import Database
 from app.services.domain import MaintenanceService, QuestionService, ResourceService, ReviewService
 from app.services.learning import LearningService
+from app.agent_runtime.observations import observe_failure, observe_success
 
 
 class PathInput(BaseModel):
@@ -188,6 +189,13 @@ class ToolRegistry:
         return self.maintenance.log_tool(
             name, arguments, lambda: tool.handler(tool.input_model.model_validate(arguments))
         )
+
+    def execute_observed(self, name: str, arguments: dict[str, Any], confirmed: bool = False) -> dict[str, Any]:
+        """Execute through the legacy handler and expose the shared result envelope."""
+        try:
+            return observe_success(name, self.execute(name, arguments, confirmed), source="local")
+        except Exception as exc:
+            return observe_failure(name, exc, suggestion="check arguments or ask the learner for clarification")
 
     def recent_logs(self, limit: int = 100) -> list[Any]:
         return self.maintenance.list_tool_logs(limit)

@@ -18,8 +18,10 @@ from ai.models import ParsedDocument, ParsedSection
 from typing import Any
 
 from ai.ingestion.ocr import (
+    FallbackOCRService,
     OCRResult,
     OCRServiceProtocol,
+    OpenAICompatibleVisionOCRService,
     PaddleOCRService,
 )
 
@@ -130,10 +132,15 @@ class PDFParser(BaseDocumentParser):
                     )
 
                     if needs_ocr:
-                        ocr_result = self._ocr_page(page)
+                        try:
+                            ocr_result = self._ocr_page(page)
+                        except DocumentParseError:
+                            content = "[扫描版 PDF：此页等待 OCR 识别]"
+                            extraction_method = "ocr_pending"
+                            ocr_result = None
 
                         # OCR 必须比原生提取结果更有信息才替换。
-                        if len(ocr_result.text.strip()) > len(native_text):
+                        if ocr_result is not None and len(ocr_result.text.strip()) > len(native_text):
                             content = normalize_text(ocr_result.text)
                             extraction_method = "ocr"
                             ocr_confidence = ocr_result.average_confidence
@@ -551,17 +558,44 @@ def create_document_parser_registry() -> DocumentParserRegistry:
 
     settings = get_ai_settings()
 
+    local_service: OCRServiceProtocol | None = None
+    if settings.ocr_enabled:
+        # With model directories unset, PaddleOCR downloads and caches its
+        # official CPU weights on first use.
+        local_service = PaddleOCRService(
+            language=settings.ocr_language,
+            device=settings.ocr_device,
+            min_confidence=settings.ocr_min_confidence,
+            detection_model_name=settings.ocr_detection_model_name,
+            detection_model_dir=settings.ocr_detection_model_dir,
+            recognition_model_name=settings.ocr_recognition_model_name,
+            recognition_model_dir=settings.ocr_recognition_model_dir,
+            use_doc_orientation=settings.ocr_use_doc_orientation,
+            use_textline_orientation=settings.ocr_use_textline_orientation,
+            enable_mkldnn=settings.ocr_enable_mkldnn,
+        )
+    service = local_service
+    if settings.ocr_api_enabled:
+        remote_service = OpenAICompatibleVisionOCRService(
+            api_key=settings.ocr_api_key,
+            base_url=str(settings.ocr_api_base_url),
+            model=settings.ocr_api_model,
+            timeout_seconds=settings.ocr_api_timeout_seconds,
+        )
+        service = FallbackOCRService(remote_service, local_service) if local_service else remote_service
+
     return DocumentParserRegistry(
-        ocr_enabled=settings.ocr_enabled,
+        ocr_service=service,
+        ocr_enabled=service is not None,
         ocr_language=settings.ocr_language,
         ocr_device=settings.ocr_device,
         ocr_dpi=settings.ocr_dpi,
         ocr_min_native_characters=settings.ocr_min_native_characters,
         ocr_min_confidence=settings.ocr_min_confidence,
         ocr_detection_model_name=settings.ocr_detection_model_name,
-        ocr_detection_model_dir=settings.ocr_detection_model_dir,
+        ocr_detection_model_dir=None,
         ocr_recognition_model_name=settings.ocr_recognition_model_name,
-        ocr_recognition_model_dir=settings.ocr_recognition_model_dir,
+        ocr_recognition_model_dir=None,
         ocr_use_doc_orientation=settings.ocr_use_doc_orientation,
         ocr_use_textline_orientation=settings.ocr_use_textline_orientation,
         ocr_enable_mkldnn=settings.ocr_enable_mkldnn,

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from threading import RLock
+import json
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import numpy as np
 from langchain_core.embeddings import Embeddings
@@ -77,8 +80,69 @@ class FastEmbedEmbeddings(Embeddings):
         return vectors[0]
 
 
+class OpenAICompatibleEmbeddings(Embeddings):
+    """Embedding adapter for SiliconFlow and other OpenAI-compatible APIs."""
+
+    def __init__(self, *, api_key: str, base_url: str, model: str, normalize: bool, batch_size: int, timeout: float) -> None:
+        self.api_key, self.base_url, self.model = api_key, base_url.rstrip("/"), model
+        self.normalize, self.batch_size, self.timeout = normalize, batch_size, timeout
+
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        request = Request(
+            f"{self.base_url}/embeddings",
+            data=json.dumps({"model": self.model, "input": texts}, ensure_ascii=False).encode("utf-8"),
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:500]
+            raise RuntimeError(f"embedding API returned HTTP {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"embedding API is unavailable: {exc.reason}") from exc
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            raise ValueError("embedding API response has no data list")
+        vectors = [row.get("embedding") for row in sorted(rows, key=lambda item: item.get("index", 0)) if isinstance(row, dict)]
+        if len(vectors) != len(texts) or any(not isinstance(vector, list) for vector in vectors):
+            raise ValueError("embedding API returned an unexpected vector count")
+        result = [[float(value) for value in vector] for vector in vectors]
+        if self.normalize:
+            for vector in result:
+                norm = float(np.linalg.norm(vector))
+                if norm:
+                    for index, value in enumerate(vector):
+                        vector[index] = value / norm
+        return result
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [vector for start in range(0, len(texts), self.batch_size) for vector in self._embed(texts[start:start + self.batch_size])]
+
+    def embed_query(self, text: str) -> list[float]:
+        vectors = self._embed([text])
+        if not vectors:
+            raise RuntimeError("embedding API returned no query vector")
+        return vectors[0]
+
+
 def create_embedding_model(settings: AISettings) -> Embeddings:
-    """Create and reuse the local ONNX BGE embedding model."""
+    """Create and reuse the configured local or remote embedding model."""
+    if settings.embedding_provider != "local":
+        if not settings.embedding_api_key.strip():
+            raise ValueError("LEARNING_AI_EMBEDDING_API_KEY is required for remote embeddings")
+        base_url = settings.embedding_base_url or "https://api.siliconflow.cn/v1"
+        return OpenAICompatibleEmbeddings(
+            api_key=settings.embedding_api_key,
+            base_url=base_url,
+            model=settings.embedding_model,
+            normalize=settings.embedding_normalize,
+            batch_size=settings.embedding_batch_size,
+            timeout=settings.request_timeout_seconds,
+        )
 
     embedding_class = TextEmbedding
     if embedding_class is None:

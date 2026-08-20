@@ -1,6 +1,11 @@
-# Resource Analysis
+---
+name: resource-analysis
+description: >
+  Analyze locally imported resources with source references and create knowledge drafts rather than final records.
+version: 1.1.0
+---
 
-Version: 1.0.0
+# Workflow
 
 Analyze only locally imported course resources. Summarize evidence with source
 references, distinguish facts from inference, and create knowledge-point drafts

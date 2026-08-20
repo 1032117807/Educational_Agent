@@ -1,6 +1,11 @@
-# Learning Plan
+---
+name: learning-plan
+description: >
+  Create evidence-based learning-plan drafts from goals, available time, mastery, and task progress.
+version: 1.1.0
+---
 
-Version: 1.0.0
+# Workflow
 
 Build plans from objective course progress, remaining time, recent study time,
 knowledge mastery, and task completion. Produce drafts first and require human

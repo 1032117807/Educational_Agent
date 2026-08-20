@@ -1,6 +1,7 @@
 ---
 name: report-visualization
 description: Generate local, evidence-based charts for learning reports. Use when a learning report needs charts for practice accuracy, task completion, study time, or knowledge-point mastery, and when visual report evidence must remain on the user's device.
+version: 1.1.0
 ---
 
 # Report Visualization

@@ -11,8 +11,9 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import AICitation, AIRun, Course, KnowledgePoint, Question, QuestionAttempt, StudyGoal, StudySession, StudyTask
+from app.models import AICitation, AIRun, BackgroundJob, Course, KnowledgePoint, Question, QuestionAttempt, StudyGoal, StudySession, StudyTask
 from server.rag_retriever import TenantPgVectorRetriever
+from ai.gateways.rerank import Reranker
 from server.tenant_session import set_session_tenant
 
 
@@ -44,7 +45,7 @@ def _prompt(feature: str, request: str, context: dict[str, object], evidence: st
     if feature == "error_analysis":
         return f"{common} Analyze learning errors. JSON: {{\"error_types\":[],\"severity\":\"low|medium|high\",\"explanation\":\"... [1]\",\"missing_knowledge\":[],\"recommended_exercises\":[],\"confidence\":0.0,\"needs_human_review\":true,\"citations\":[1]}}. Attempt: {json.dumps(context, ensure_ascii=False)}\nEvidence:\n{evidence}"
     if feature == "learning_plan":
-        return f"{common} Create a realistic study-plan draft. JSON: {{\"summary\":\"\",\"risks\":[],\"tasks\":[{{\"title\":\"\",\"date\":\"YYYY-MM-DD\",\"duration_minutes\":30,\"priority\":\"medium\",\"type\":\"study\",\"reason\":\"\"}}]}}. Do not schedule more than {context['weekly_minutes']} minutes per week. Context: {json.dumps(context, ensure_ascii=False)}"
+        return f"{common} Create a realistic study-plan draft. JSON: {{\"summary\":\"\",\"risks\":[],\"tasks\":[{{\"title\":\"\",\"date\":\"YYYY-MM-DD\",\"scheduled_time\":\"HH:MM\",\"duration_minutes\":30,\"priority\":\"medium\",\"type\":\"study\",\"reason\":\"\"}}]}}. Use dates from {date.today().isoformat()} through the target date. Do not schedule more than {context['weekly_minutes']} minutes per week. Context: {json.dumps(context, ensure_ascii=False)}"
     if feature == "learning_report":
         return f"{common} Explain these computed learning statistics without inventing facts. JSON: {{\"summary\":\"\",\"strengths\":[],\"weaknesses\":[],\"recommendations\":[],\"next_week_priorities\":[]}}. Stats: {json.dumps(context, ensure_ascii=False)}"
     if feature == "research_curation":
@@ -79,24 +80,80 @@ def _context(session: Session, tenant_id: str, feature: str, data: dict[str, obj
     return course_id, {"course_id": course_id}, request
 
 
-def run_ai_feature(*, payload: dict[str, object], session_factory: Callable[[], Session], embeddings: Embeddings, embedding_version: str, dimensions: int, chat_model: BaseChatModel | None, provider: str, model_name: str) -> dict[str, object]:
+def run_ai_feature(*, payload: dict[str, object], session_factory: Callable[[], Session], embeddings: Embeddings, embedding_version: str, dimensions: int, chat_model: BaseChatModel | None, provider: str, model_name: str, reranker: Reranker | None = None, rerank_candidate_limit: int = 24, query_rewrite_enabled: bool = True, hybrid_retrieval_enabled: bool = True) -> dict[str, object]:
     feature = str(payload.get("feature", "")); tenant_id = str(payload.get("tenant_id", "")); data = payload.get("data", {})
     if feature not in SUPPORTED_FEATURES or not tenant_id or not isinstance(data, dict): raise ValueError("invalid AI feature job")
     if chat_model is None: raise ValueError("AI chat model is not configured")
     with session_factory() as session:
         set_session_tenant(session, tenant_id)
         course_id, context, retrieval_query = _context(session, tenant_id, feature, data)
-        retriever = TenantPgVectorRetriever(session=session, embeddings=embeddings, embedding_version=embedding_version, dimensions=dimensions)
+        retriever = TenantPgVectorRetriever(session=session, embeddings=embeddings, embedding_version=embedding_version, dimensions=dimensions, reranker=reranker, rerank_candidate_limit=rerank_candidate_limit, query_rewrite_enabled=query_rewrite_enabled, hybrid_retrieval_enabled=hybrid_retrieval_enabled)
         needs_evidence = feature not in {"learning_plan", "learning_report"}
         hits = retriever.retrieve(retrieval_query, tenant_id=tenant_id, course_id=course_id) if needs_evidence else []
         if needs_evidence and not hits: raise ValueError("no indexed evidence found for this AI task")
         response = chat_model.invoke(_prompt(feature, str(data.get("request", "")), context, _evidence(hits)))
         output = _json_object(response.content)
+        created_tasks = 0
+        if feature == "learning_plan":
+            # A completed plan must become visible, actionable daily work.
+            goal = session.scalar(select(StudyGoal).where(
+                StudyGoal.id == int(data["goal_id"]), StudyGoal.tenant_id == tenant_id,
+            ))
+            minutes_by_week: dict[tuple[int, int], int] = {}
+            existing = set()
+            if goal is not None:
+                existing = {
+                    (row.title.strip().casefold(), row.planned_date)
+                    for row in session.scalars(select(StudyTask).where(
+                        StudyTask.tenant_id == tenant_id, StudyTask.course_id == goal.course_id,
+                        StudyTask.source == "ai",
+                    )).all()
+                }
+            for item in output.get("tasks", []) if isinstance(output.get("tasks"), list) else []:
+                if not isinstance(item, dict) or not item.get("title") or not item.get("date"):
+                    continue
+                try:
+                    planned_date = date.fromisoformat(str(item["date"]))
+                    minutes = max(1, min(1440, int(item.get("duration_minutes", 30))))
+                except (TypeError, ValueError):
+                    continue
+                if goal is None or planned_date > goal.target_date:
+                    continue
+                key = (str(item["title"]).strip().casefold(), planned_date)
+                if key in existing:
+                    continue
+                week = planned_date.isocalendar()
+                week_key = (week.year, week.week)
+                if minutes_by_week.get(week_key, 0) + minutes > goal.weekly_minutes:
+                    continue
+                session.add(StudyTask(
+                    tenant_id=tenant_id, course_id=goal.course_id,
+                    title=str(item["title"]).strip()[:160], planned_date=planned_date,
+                    duration_minutes=minutes, priority=str(item.get("priority", "medium"))[:20],
+                    scheduled_time=str(item.get("scheduled_time", ""))[:5],
+                    task_type=str(item.get("type", "study"))[:30],
+                    note=str(item.get("reason", ""))[:10000], source="ai",
+                ))
+                created_tasks += 1
+                existing.add(key)
+                minutes_by_week[week_key] = minutes_by_week.get(week_key, 0) + minutes
         citations = output.get("citations", [])
         if needs_evidence:
             if not isinstance(citations, list) or not citations or any(not isinstance(x, int) or x < 1 or x > len(hits) for x in citations): raise ValueError("AI output must contain valid evidence citations")
         run = AIRun(tenant_id=tenant_id, run_uuid=str(uuid4()), feature=feature, status="completed", provider=provider, model_name=model_name, prompt_version="saas-ai-services-v1", input_json=json.dumps(data, ensure_ascii=False), output_json=json.dumps(output, ensure_ascii=False), course_id=course_id, finished_at=datetime.now())
         session.add(run); session.flush()
         for number, hit in enumerate(hits, 1): session.add(AICitation(tenant_id=tenant_id, ai_run_id=run.id, chunk_id=hit.chunk_id, citation_number=number, quote_text=hit.content[:1000], relevance_score=hit.rrf_score))
+        next_plan_job_id = None
+        if feature == "learning_report" and data.get("goal_id"):
+            plan = BackgroundJob(
+                tenant_id=tenant_id, job_type="ai_feature", status="queued",
+                payload=json.dumps({"tenant_id": tenant_id, "feature": "learning_plan", "data": {
+                    "goal_id": int(data["goal_id"]), "course_id": course_id,
+                    "request": "根据这次练习分析结果安排下一天复习。分析结果：" + json.dumps(output, ensure_ascii=False),
+                }}, ensure_ascii=False), detail="queued adaptive plan from practice analysis",
+            )
+            session.add(plan); session.flush(); next_plan_job_id = plan.id
         session.commit()
-        return {"ai_run_id": run.id, "feature": feature, "output": output, "evidence_count": len(hits)}
+        return {"ai_run_id": run.id, "feature": feature, "output": output,
+                "evidence_count": len(hits), "created_task_count": created_tasks,
+                "next_plan_job_id": next_plan_job_id}

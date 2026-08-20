@@ -1,0 +1,2 @@
+{"case_id":"route-001","message":"create a study plan","expected_action":"generate_plan","source":"harness-v2-contract"}
+{"case_id":"route-002","message":"remember that I study in the morning","expected_action":"remember","source":"harness-v2-contract"}

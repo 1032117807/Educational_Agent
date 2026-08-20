@@ -12,6 +12,8 @@ from ai.ingestion.ocr import (
     OCRResult,
     OCRServiceProtocol,
     PaddleOCRService,
+    OpenAICompatibleVisionOCRService,
+    FallbackOCRService,
 )
 from ai.ingestion.pipeline import (
     DocumentIngestionPipeline,
@@ -42,6 +44,8 @@ __all__ = [
     "PDFParser",
     "PPTXParser",
     "PaddleOCRService",
+    "OpenAICompatibleVisionOCRService",
+    "FallbackOCRService",
     "ParsedDocument",
     "ParsedSection",
     "TXTParser",

@@ -8,10 +8,12 @@ from uuid import uuid4
 
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AICitation, AIRun, Question
+from app.models import AICitation, AIRun, KnowledgePoint, PracticeSession, PracticeSessionQuestion, Question
 from server.rag_retriever import TenantPgVectorRetriever
+from ai.gateways.rerank import Reranker
 from server.tenant_session import set_session_tenant
 
 
@@ -27,7 +29,7 @@ def _json_object(content: object) -> dict[str, object]:
     return decoded
 
 
-def _validate_question(item: object, evidence_count: int) -> dict[str, object]:
+def _validate_question(item: object, evidence_count: int, *, allow_ungrounded: bool = False) -> dict[str, object]:
     if not isinstance(item, dict):
         raise ValueError("each generated question must be an object")
     prompt = str(item.get("prompt", "")).strip()
@@ -37,12 +39,12 @@ def _validate_question(item: object, evidence_count: int) -> dict[str, object]:
     citations = item.get("citations", [])
     if not prompt or not answer or kind not in ALLOWED_QUESTION_KINDS:
         raise ValueError("generated question has missing or unsupported fields")
-    if not isinstance(citations, list) or not citations:
+    if not allow_ungrounded and (not isinstance(citations, list) or not citations):
         raise ValueError("every generated question requires evidence citations")
-    citation_numbers = [int(value) for value in citations]
+    citation_numbers = [int(value) for value in citations] if isinstance(citations, list) else []
     if any(number < 1 or number > evidence_count for number in citation_numbers):
         raise ValueError("generated question cites evidence outside the retrieved set")
-    if not all(f"[{number}]" in explanation for number in citation_numbers):
+    if not allow_ungrounded and not all(f"[{number}]" in explanation for number in citation_numbers):
         raise ValueError("question explanation must include its evidence citations")
     options = item.get("options", [])
     if kind in {"single_choice", "multiple_choice"}:
@@ -76,6 +78,10 @@ def generate_grounded_questions(
     chat_model: BaseChatModel | None,
     chat_provider: str,
     chat_model_name: str,
+    reranker: Reranker | None = None,
+    rerank_candidate_limit: int = 24,
+    query_rewrite_enabled: bool = True,
+    hybrid_retrieval_enabled: bool = True,
 ) -> dict[str, object]:
     """Generate tenant-scoped questions only from retrieved course evidence."""
     if chat_model is None:
@@ -96,18 +102,23 @@ def generate_grounded_questions(
             embeddings=embeddings,
             embedding_version=embedding_version,
             dimensions=dimensions,
+            reranker=reranker,
+            rerank_candidate_limit=rerank_candidate_limit,
+            query_rewrite_enabled=query_rewrite_enabled,
+            hybrid_retrieval_enabled=hybrid_retrieval_enabled,
         )
         hits = retriever.retrieve(request, tenant_id=tenant_id, course_id=course_id)
-        if not hits:
+        allow_ungrounded = bool(payload.get("allow_ungrounded", False))
+        if not hits and not allow_ungrounded:
             raise ValueError("no indexed course evidence found; upload and index resources first")
-        evidence = "\n\n".join(f"[{number}] {hit.content[:1800]}" for number, hit in enumerate(hits, start=1))
+        evidence = "\n\n".join(f"[{number}] {hit.content[:1800]}" for number, hit in enumerate(hits, start=1)) or "No course materials are indexed yet. Create a diagnostic assessment from the requested subject and level using general instructional knowledge."
         prompt = (
-            "You generate high-quality study questions from supplied evidence only. "
-            "Return JSON only, with no markdown. The JSON shape is "
+            ("You generate high-quality study questions from supplied evidence only. " if hits else "You generate a general baseline diagnostic assessment for the requested subject and level. ")
+            + "Return JSON only, with no markdown. The JSON shape is "
             '{"questions":[{"prompt":"...","answer":"...","kind":"single_choice|multiple_choice|true_false|short_answer",'
             '"options":["..."],"explanation":"... [1]","tags":["..."],"difficulty":3,"citations":[1]}]}. '
-            "Every question must cite one or more evidence numbers in both citations and explanation. "
-            "Do not use facts that are absent from the evidence. Choice answers must exactly match one option. "
+            + ("Every question must cite one or more evidence numbers in both citations and explanation. " if hits else "No citations are required because this is an ungrounded diagnostic; clearly treat questions as a baseline assessment. ")
+            + "Do not use facts that are absent from the evidence. Choice answers must exactly match one option. "
             f"Create exactly {count} questions. Requested focus: {request}. Difficulty: {difficulty}/5. "
             f"Allowed kinds: {', '.join(kinds)}.\n\nEvidence:\n{evidence}"
         )
@@ -116,7 +127,7 @@ def generate_grounded_questions(
         raw_questions = decoded.get("questions")
         if not isinstance(raw_questions, list) or len(raw_questions) != count:
             raise ValueError("AI response did not contain the requested number of questions")
-        questions = [_validate_question(item, len(hits)) for item in raw_questions]
+        questions = [_validate_question(item, len(hits), allow_ungrounded=allow_ungrounded) for item in raw_questions]
 
         run = AIRun(
             tenant_id=tenant_id,
@@ -136,11 +147,31 @@ def generate_grounded_questions(
         for number, hit in enumerate(hits, start=1):
             session.add(AICitation(tenant_id=tenant_id, ai_run_id=run.id, chunk_id=hit.chunk_id, citation_number=number, quote_text=hit.content[:1000], relevance_score=hit.rrf_score))
         persisted = []
+        knowledge_points = session.scalars(select(KnowledgePoint).where(
+            KnowledgePoint.tenant_id == tenant_id, KnowledgePoint.course_id == course_id,
+        ).order_by(KnowledgePoint.importance.desc(), KnowledgePoint.id)).all()
         for item in questions:
-            question = Question(tenant_id=tenant_id, course_id=course_id, **{key: value for key, value in item.items() if key != "citations"})
+            point = next((candidate for candidate in knowledge_points
+                          if candidate.name.casefold() in item["prompt"].casefold()), None)
+            if point is None and knowledge_points:
+                point = knowledge_points[len(persisted) % len(knowledge_points)]
+            question = Question(tenant_id=tenant_id, course_id=course_id,
+                                knowledge_point_id=point.id if point else None,
+                                **{key: value for key, value in item.items() if key != "citations"})
             session.add(question)
             session.flush()
             persisted.append(question.id)
         run.output_json = json.dumps({"count": len(persisted), "question_ids": persisted, "evidence_count": len(hits)}, ensure_ascii=False)
         session.commit()
-        return {"ai_run_id": run.id, "question_ids": persisted, "count": len(persisted), "evidence_count": len(hits)}
+        practice_session_id = None
+        if bool(payload.get("auto_practice", False)) and persisted:
+            raw_goal_id = payload.get("goal_id")
+            practice = PracticeSession(tenant_id=tenant_id, course_id=course_id, total=len(persisted),
+                                       seed=int(raw_goal_id) if raw_goal_id is not None else None)
+            session.add(practice); session.flush()
+            session.add_all([PracticeSessionQuestion(tenant_id=tenant_id, session_id=practice.id, question_id=qid, position=pos)
+                             for pos, qid in enumerate(persisted, 1)])
+            practice_session_id = practice.id
+            session.commit()
+        return {"ai_run_id": run.id, "question_ids": persisted, "count": len(persisted),
+                "evidence_count": len(hits), "practice_session_id": practice_session_id}

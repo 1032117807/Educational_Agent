@@ -1,0 +1,1 @@
+{"id":"tool-001","user_request":"List files in my workspace.","available_tools":["filesystem.list_directory"],"expected_tools":["filesystem.list_directory"],"expected_arguments":{"path":"."},"forbidden_tools":["filesystem.write_text"],"expected_final_state":"directory_listed"}

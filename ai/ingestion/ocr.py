@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import cached_property
+import base64
+import json
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from ai.exceptions import DocumentParseError
 
@@ -161,3 +165,70 @@ class PaddleOCRService:
             average_confidence=average_confidence,
             line_count=len(lines),
         )
+
+
+class OpenAICompatibleVisionOCRService:
+    """OCR through a vision model exposed via OpenAI-compatible chat API."""
+
+    def __init__(self, *, api_key: str, base_url: str, model: str, timeout_seconds: float) -> None:
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.timeout_seconds = timeout_seconds
+
+    def recognize(self, image: str | Path | Any) -> OCRResult:
+        encoded = self._to_data_url(image)
+        payload = {
+            "model": self.model,
+            "temperature": 0,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "Perform OCR. Return only the visible text in the image, preserving paragraphs. Do not explain."},
+                {"type": "image_url", "image_url": {"url": encoded}},
+            ]}],
+        }
+        url = self.base_url if self.base_url.endswith("/chat/completions") else f"{self.base_url}/chat/completions"
+        request = Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}, method="POST")
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                decoded = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            raise DocumentParseError(f"OCR API returned HTTP {exc.code}") from exc
+        except URLError as exc:
+            raise DocumentParseError(f"OCR API unavailable: {exc.reason}") from exc
+        try:
+            content = decoded["choices"][0]["message"]["content"]
+            text = content if isinstance(content, str) else str(content)
+        except (KeyError, IndexError, TypeError) as exc:
+            raise DocumentParseError("OCR API returned an invalid response") from exc
+        return OCRResult(text=text.strip(), average_confidence=1.0, line_count=len([line for line in text.splitlines() if line.strip()]))
+
+    @staticmethod
+    def _to_data_url(image: str | Path | Any) -> str:
+        if isinstance(image, (str, Path)):
+            path = Path(image)
+            data = path.read_bytes()
+            mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+        else:
+            try:
+                height, width, channels = image.shape
+                import fitz
+                pixmap = fitz.Pixmap(fitz.csRGB, width, height, image.tobytes(), False)
+                data = pixmap.tobytes("png")
+                mime = "image/png"
+            except Exception as exc:
+                raise DocumentParseError("Unable to encode image for OCR API") from exc
+        return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+
+
+class FallbackOCRService:
+    """Try remote OCR first; local CPU OCR remains available as a fallback."""
+
+    def __init__(self, primary: OCRServiceProtocol, fallback: OCRServiceProtocol) -> None:
+        self.primary = primary
+        self.fallback = fallback
+
+    def recognize(self, image: str | Path | Any) -> OCRResult:
+        try:
+            return self.primary.recognize(image)
+        except Exception:
+            return self.fallback.recognize(image)

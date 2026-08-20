@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
 
 from app.database import Database
-from app.models import AgentMemory
+from app.models import AgentMemory, AgentMessage
+
+
+@dataclass(frozen=True)
+class MemoryDecision:
+    action: str
+    candidate: dict[str, Any]
+    existing_id: int | None = None
 
 
 class AgentMemoryService:
@@ -16,8 +24,9 @@ class AgentMemoryService:
         "goal", "plan_preference", "weak_point", "learning_pace",
     }
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database, *, conflict_resolution_enabled: bool = True) -> None:
         self.database = database
+        self.conflict_resolution_enabled = conflict_resolution_enabled
 
     def remember(
         self, *, scope: str, category: str, content: dict[str, Any],
@@ -32,7 +41,19 @@ class AgentMemoryService:
             raise ValueError("不支持的记忆类别")
         if scope == "course" and course_id is None:
             raise ValueError("课程记忆必须提供 course_id")
+        decision = (
+            self.decide_candidate(scope=scope, category=category, content=content, course_id=course_id)
+            if self.conflict_resolution_enabled
+            else MemoryDecision("ADD", {"scope": scope, "category": category, "course_id": course_id, "content": content})
+        )
+        if decision.action == "NOOP":
+            with self.database.session() as session:
+                return session.get(AgentMemory, decision.existing_id)
         with self.database.session() as session:
+            if decision.action == "UPDATE" and decision.existing_id is not None:
+                previous = session.get(AgentMemory, decision.existing_id)
+                if previous is not None:
+                    previous.deleted = True
             item = AgentMemory(
                 scope=scope, course_id=course_id, category=category,
                 content_json=json.dumps(content, ensure_ascii=False),
@@ -41,6 +62,33 @@ class AgentMemoryService:
             session.add(item)
             session.flush()
             return item
+
+    def decide_candidate(
+        self, *, scope: str, category: str, content: dict[str, Any], course_id: int | None = None,
+    ) -> MemoryDecision:
+        """Compare a candidate to the current core memory without writing it."""
+        candidate = {"scope": scope, "category": category, "course_id": course_id, "content": content}
+        for item in self.list_memories(course_id):
+            if item.scope != scope or item.category != category or item.course_id != course_id:
+                continue
+            existing = json.loads(item.content_json or "{}")
+            if existing == content:
+                return MemoryDecision("NOOP", candidate, item.id)
+            return MemoryDecision("UPDATE", candidate, item.id)
+        return MemoryDecision("ADD", candidate)
+
+    def search_episodic(self, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
+        """Search conversation history on demand; full messages stay persisted once."""
+        normalized = query.strip()
+        if not normalized:
+            return []
+        with self.database.session() as session:
+            rows = list(session.scalars(
+                select(AgentMessage)
+                .where(AgentMessage.content.contains(normalized))
+                .order_by(AgentMessage.id.desc()).limit(max(1, min(limit, 50)))
+            ))
+        return [{"message_id": row.id, "session_id": row.session_id, "role": row.role, "content": row.content} for row in rows]
 
     def list_memories(self, course_id: int | None = None) -> list[AgentMemory]:
         with self.database.session() as session:

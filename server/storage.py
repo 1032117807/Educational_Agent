@@ -11,6 +11,8 @@ class ObjectStorage(Protocol):
 
     def download_to(self, *, key: str, destination: Path) -> None: ...
 
+    def get_bytes(self, *, key: str) -> bytes: ...
+
     def delete(self, *, key: str) -> None: ...
 
 
@@ -34,6 +36,9 @@ class S3ObjectStorage:
     def download_to(self, *, key: str, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         self.client.download_file(self.bucket, key, str(destination))
+
+    def get_bytes(self, *, key: str) -> bytes:
+        return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
 
     def delete(self, *, key: str) -> None:
         self.client.delete_object(Bucket=self.bucket, Key=key)

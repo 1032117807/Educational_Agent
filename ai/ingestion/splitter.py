@@ -6,7 +6,7 @@ import re
 from ai.models import ChunkDraft, ParsedDocument, ParsedSection
 
 
-CHUNKER_VERSION = "recursive-citation-v1"
+CHUNKER_VERSION = "recursive-contextual-citation-v2"
 
 
 def clean_text_for_retrieval(text: str) -> str:
@@ -33,6 +33,7 @@ class CitationAwareSplitter:
         *,
         chunk_size: int = 800,
         chunk_overlap: int = 120,
+        contextual_retrieval_enabled: bool = True,
     ) -> None:
         if chunk_size < 200:
             raise ValueError("chunk_size 不能小于 200")
@@ -45,6 +46,7 @@ class CitationAwareSplitter:
 
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.contextual_retrieval_enabled = contextual_retrieval_enabled
 
         # Import lazily: langchain-text-splitters imports optional
         # sentence-transformers modules from its package initializer, which in
@@ -107,7 +109,8 @@ class CitationAwareSplitter:
             if not content:
                 continue
 
-            retrieval_text = clean_text_for_retrieval(content)
+            cleaned_content = clean_text_for_retrieval(content)
+            retrieval_text = self._contextualize(section, cleaned_content)
             if not retrieval_text:
                 continue
 
@@ -133,10 +136,25 @@ class CitationAwareSplitter:
                         "section_number": section_number,
                         "section_chunk_number": local_number,
                         "chunker_version": self.version,
+                        "contextual_retrieval_enabled": self.contextual_retrieval_enabled,
                     },
                 )
             )
 
         return result
+
+    def _contextualize(self, section: ParsedSection, content: str) -> str:
+        if not self.contextual_retrieval_enabled:
+            return content
+        metadata = section.metadata or {}
+        parts = [
+            f"Document: {section.source_name}" if section.source_name else "",
+            f"Course: {metadata.get('course_name')}" if metadata.get("course_name") else "",
+            f"Section: {section.section_title}" if section.section_title else "",
+            f"Parent heading: {metadata.get('parent_heading')}" if metadata.get("parent_heading") else "",
+            f"Location: {section.location_label}" if section.location_label else "",
+        ]
+        prefix = "\n".join(part for part in parts if part)
+        return f"{prefix}\nContent: {content}" if prefix else content
 
 

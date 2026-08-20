@@ -1,0 +1,1 @@
+{"case_id":"retry-001","tool":"web.search","arguments":{"query":"calculus"},"failures_before_stop":3,"source":"harness-v2-contract"}

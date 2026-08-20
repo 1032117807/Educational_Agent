@@ -1,0 +1,6 @@
+{
+  "dataset_version": "evals-v1",
+  "repetitions": 3,
+  "include_llm": false,
+  "notes": "LLM/Judge metrics require versioned, human-labeled fixtures and are disabled by default."
+}

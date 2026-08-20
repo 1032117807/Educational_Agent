@@ -15,6 +15,26 @@ class SpecialistResult:
     agent_name: str
     summary: str
     context: dict[str, Any]
+    evidence: tuple[dict[str, Any], ...] = ()
+    artifacts: tuple[str, ...] = ()
+    validation: tuple[dict[str, Any], ...] = ()
+    missing_information: tuple[str, ...] = ()
+    confidence: float = 0.0
+    next_recommendation: str = ""
+
+    def handoff(self) -> dict[str, Any]:
+        """Return an inspectable contract without exposing specialist internals."""
+        return {
+            "agent_name": self.agent_name,
+            "summary": self.summary,
+            "context": self.context,
+            "evidence": list(self.evidence),
+            "artifacts": list(self.artifacts),
+            "validation": list(self.validation),
+            "missing_information": list(self.missing_information),
+            "confidence": max(0.0, min(1.0, self.confidence)),
+            "next_recommendation": self.next_recommendation,
+        }
 
 
 class ResourceAnalysisSpecialist:
@@ -39,9 +59,13 @@ class ResourceAnalysisSpecialist:
                 ) if progress else None,
                 should_cancel=should_cancel,
             )
-        return SpecialistResult(self.name, f"Indexed {len(resource_ids)} resources.", {
-            "indexed_resource_ids": resource_ids,
-        })
+        return SpecialistResult(
+            self.name, f"Indexed {len(resource_ids)} resources.",
+            {"indexed_resource_ids": resource_ids},
+            artifacts=tuple(f"resource:{item}" for item in resource_ids),
+            validation=({"status": "completed", "indexed_resources": len(resource_ids)},),
+            confidence=1.0,
+        )
 
     def extract(
         self, *, course_id: int, resource_ids: list[int], progress: Progress | None = None,
@@ -55,10 +79,14 @@ class ResourceAnalysisSpecialist:
             ) if progress else None,
             should_cancel=should_cancel,
         )
-        return SpecialistResult(self.name, f"Generated {result.draft_count} knowledge point drafts.", {
-            "knowledge_ai_run_id": result.ai_run_id,
-            "knowledge_draft_count": result.draft_count,
-        })
+        return SpecialistResult(
+            self.name, f"Generated {result.draft_count} knowledge point drafts.",
+            {"knowledge_ai_run_id": result.ai_run_id, "knowledge_draft_count": result.draft_count},
+            artifacts=(f"ai_run:{result.ai_run_id}",),
+            validation=({"draft_count": result.draft_count},),
+            confidence=0.8 if result.draft_count else 0.0,
+            next_recommendation="Review knowledge point drafts before accepting them.",
+        )
 
 
 class QuestionSpecialist:
@@ -81,9 +109,12 @@ class QuestionSpecialist:
         if should_cancel and should_cancel():
             raise InterruptedError("Question generation cancelled")
         question_ids = [drafts.accept(item) for item in generated.draft_ids]
-        return SpecialistResult(self.name, f"Generated {len(question_ids)} practice questions.", {
-            "question_draft_ids": list(generated.draft_ids), "question_ids": question_ids,
-        })
+        return SpecialistResult(
+            self.name, f"Generated {len(question_ids)} practice questions.",
+            {"question_draft_ids": list(generated.draft_ids), "question_ids": question_ids},
+            artifacts=tuple(f"question:{item}" for item in question_ids),
+            validation=({"question_count": len(question_ids)},), confidence=1.0 if question_ids else 0.0,
+        )
 
 
 class LearningPlanSpecialist:
@@ -96,9 +127,11 @@ class LearningPlanSpecialist:
         draft_id = self.plan_factory().generate(
             goal_id, start_date=date.today(), daily_minutes=daily_minutes
         )
-        return SpecialistResult(self.name, f"Generated learning plan draft {draft_id}.", {
-            "plan_draft_id": draft_id,
-        })
+        return SpecialistResult(
+            self.name, f"Generated learning plan draft {draft_id}.", {"plan_draft_id": draft_id},
+            artifacts=(f"plan_draft:{draft_id}",), validation=({"draft_id": draft_id},), confidence=1.0,
+            next_recommendation="Ask the learner to confirm the plan draft before creating tasks.",
+        )
 
 
 class ReportSpecialist:
@@ -120,9 +153,10 @@ class ReportSpecialist:
         if should_cancel and should_cancel():
             raise InterruptedError("Report generation cancelled")
         saved = service.save_snapshot(report, render_learning_report(report))
-        return SpecialistResult(self.name, f"Generated learning report {saved.id}.", {
-            "report_snapshot_id": saved.id,
-            "report_markdown": saved.markdown,
-            "start_date": str(saved.start_date),
-            "end_date": str(saved.end_date),
-        })
+        return SpecialistResult(
+            self.name, f"Generated learning report {saved.id}.",
+            {"report_snapshot_id": saved.id, "report_markdown": saved.markdown,
+             "start_date": str(saved.start_date), "end_date": str(saved.end_date)},
+            artifacts=(f"report_snapshot:{saved.id}",), validation=({"report_snapshot_id": saved.id},),
+            confidence=1.0,
+        )

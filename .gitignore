@@ -5,6 +5,7 @@ __pycache__/
 .pytest-tmp/
 .test-artifacts/
 .test-tmp/
+.test-artifacts/
 .venv/
 dist/
 build/
@@ -32,6 +33,14 @@ chroma/
 models/
 data/*
 !data/.gitkeep
+
+# Generated evaluation output and local server logs
+evals/reports/
+evaluation/results/
+server-api.log
+server-api.err
+*.egg-info/
+nuitka-crash-report.xml
 
 # Local runtime and temporary files
 *.tmp

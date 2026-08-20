@@ -26,7 +26,7 @@ def upgrade() -> None:
             embedding_model VARCHAR(160) NOT NULL,
             embedding_version VARCHAR(80) NOT NULL,
             content_sha256 VARCHAR(64) NOT NULL,
-            embedding vector(384) NOT NULL,
+            embedding vector(512) NOT NULL,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (chunk_id, embedding_version)
         )

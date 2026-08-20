@@ -4,6 +4,7 @@ from datetime import date, timedelta
 import pytest
 
 from ai.agents import AgentDecision, LearningPlanAgentService
+from app.agent_runtime import AgentBudget
 from app.database import Database
 from app.models import StudyGoal
 from app.services.cancellation import CancellationToken, OperationCancelled
@@ -117,6 +118,86 @@ def test_agent_recognizes_learning_report_request_without_model_call(tmp_path):
     decision = service.respond("帮我生成学习报告")
 
     assert decision.action == "generate_report"
+    db.close()
+
+
+def test_agent_context_exposes_core_tools_and_discloses_other_tools_on_demand(tmp_path):
+    from app.core.config import AppSettings
+    from app.tools.registry import ToolRegistry
+
+    db = Database(f"sqlite:///{(tmp_path / 'agent-tools.db').as_posix()}")
+    db.create_schema()
+    settings = AppSettings(data_dir=tmp_path / "data")
+    settings.ensure_directories()
+    service = LearningPlanAgentService(
+        database=db, chat_model=FakeStructuredModel(AgentDecision(reply="ok")),
+        plan_factory=lambda: None, tool_registry=ToolRegistry(db, settings),
+    )
+
+    names = {item["name"] for item in service.context()["available_tools"]}
+    discovered = service.discover_tools("backup")
+
+    assert "tool.search" in names
+    assert "database.backup" not in names
+    assert discovered[0]["name"] == "database.backup"
+    db.close()
+
+
+def test_desktop_tool_execution_uses_shared_runtime_observation(tmp_path):
+    from app.core.config import AppSettings
+    from app.tools.registry import ToolRegistry
+
+    db = Database(f"sqlite:///{(tmp_path / 'agent-runtime-tool.db').as_posix()}")
+    db.create_schema()
+    settings = AppSettings(data_dir=tmp_path / "data")
+    settings.ensure_directories()
+    service = LearningPlanAgentService(
+        database=db, chat_model=FakeStructuredModel(AgentDecision(reply="ok")),
+        plan_factory=lambda: None, tool_registry=ToolRegistry(db, settings),
+    )
+
+    result = service.execute_tool_runtime("tool.search", {"query": "backup"})
+
+    assert result["ok"] is True
+    assert result["runtime"]["status"] == "completed"
+    assert result["data"]["capabilities"][0]["name"] == "database.backup"
+    db.close()
+
+
+def test_agent_memory_retrieval_feature_flag_excludes_memory_from_context(tmp_path):
+    from app.services.agent_memory import AgentMemoryService
+
+    db = Database(f"sqlite:///{(tmp_path / 'agent-memory-flag.db').as_posix()}")
+    db.create_schema()
+    memories = AgentMemoryService(db)
+    memories.remember(scope="long_term", category="learning_pace", content={"minutes": 30}, confirmed=True)
+    service = LearningPlanAgentService(
+        database=db, chat_model=FakeStructuredModel(AgentDecision(reply="ok")),
+        plan_factory=lambda: None, memory_service=memories, memory_retrieval_enabled=False,
+    )
+
+    assert service.context()["confirmed_memories"] == []
+    db.close()
+
+
+def test_desktop_runtime_returns_full_tool_result_artifacts(tmp_path):
+    class LargeToolRegistry:
+        def execute(self, _name, _arguments, *, confirmed=False):
+            assert not confirmed
+            return {"content": "x" * 500}
+
+    db = Database(f"sqlite:///{(tmp_path / 'agent-large-tool.db').as_posix()}")
+    db.create_schema()
+    service = LearningPlanAgentService(
+        database=db, chat_model=FakeStructuredModel(AgentDecision(reply="ok")),
+        plan_factory=lambda: None, tool_registry=LargeToolRegistry(),
+        budget_factory=lambda: AgentBudget(max_tool_result_chars=100),
+    )
+
+    result = service.execute_tool_runtime("course.list", {})
+
+    artifact_ref = result["meta"]["artifact_ref"]
+    assert result["runtime"]["tool_result_artifacts"][artifact_ref] == {"content": "x" * 500}
     db.close()
 
 

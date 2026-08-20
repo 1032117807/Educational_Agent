@@ -1,0 +1,7 @@
+{
+  "baseline": "dense_only",
+  "candidate": "hybrid_rrf_rerank",
+  "configurations": ["keyword_only", "dense_only", "keyword_dense", "hybrid_rrf", "hybrid_rrf_rerank"],
+  "same_gold_dataset_required": true,
+  "metrics": ["recall_at_1", "recall_at_3", "recall_at_5", "recall_at_10", "mrr", "ndcg_at_5", "ndcg_at_10", "mean_latency_ms", "p50_latency_ms", "p95_latency_ms"]
+}

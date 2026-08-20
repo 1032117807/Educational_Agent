@@ -45,6 +45,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.bootstrap import bootstrap
 from app.services.domain import ResourceService
+from app.services.desktop_companion import DesktopCompanion
 from app.ui.main_window import MainWindow
 
 
@@ -99,6 +100,13 @@ def main() -> int:
                 break
     sys.excepthook = exception_hook
     service, config = bootstrap()
+    companion = DesktopCompanion(
+        api_url=config.saas_api_url, access_token=config.saas_access_token,
+        refresh_token=config.saas_refresh_token, companion_id=config.desktop_companion_id,
+        token_store=config.data_dir / "desktop_companion_auth.json",
+    )
+    companion.start()
+    app.aboutToQuit.connect(companion.stop)
     window = MainWindow(service, config)
     window.show()
     return app.exec()
