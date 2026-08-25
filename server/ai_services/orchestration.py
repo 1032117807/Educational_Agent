@@ -139,7 +139,7 @@ def run_ai_feature(*, payload: dict[str, object], session_factory: Callable[[], 
                     minutes = max(1, min(1440, int(item.get("duration_minutes", 30))))
                 except (TypeError, ValueError):
                     continue
-                if goal is None or planned_date > goal.target_date:
+                if goal is None or planned_date < date.today() or planned_date > goal.target_date:
                     continue
                 key = (str(item["title"]).strip().casefold(), planned_date)
                 if key in existing:

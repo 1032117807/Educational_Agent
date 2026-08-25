@@ -70,6 +70,8 @@ def test_web_client_assets_and_mount_are_present() -> None:
     runtime = (root / "agent-runtime.js").read_text(encoding="utf-8")
     assert "按学习主题创建一门新课程" in runtime
     assert "course_id: courseId" in runtime
+    router_source = Path("server/routers.py").read_text(encoding="utf-8")
+    assert '"course_id": course_id, "started_at"' in router_source
     assert 'src="/web/mathjax-config.js"' in page
     assert "<script>" not in page
 

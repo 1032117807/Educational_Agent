@@ -2390,7 +2390,10 @@ def launch_learning_loop(session_id: int, payload: LearningLaunchRequest, contex
         if stored.get("status") == "completed":
             raise HTTPException(status_code=409, detail="this learning request has already started")
         source_items = list(stored.get("source_items") or [])
-        stored.update({"status": "completed", "started_at": datetime.now().isoformat()})
+        # The handoff is later used when imported material finishes indexing.
+        # Persist the resolved course so that follow-up question generation is
+        # attached to an automatically created course as well.
+        stored.update({"status": "completed", "course_id": course_id, "started_at": datetime.now().isoformat()})
         pending.payload_json = json.dumps(stored, ensure_ascii=False)
     goal = StudyGoal(tenant_id=context.tenant_id, title=payload.title.strip(), course_id=course_id,
                      target_date=target, weekly_minutes=payload.weekly_minutes)
