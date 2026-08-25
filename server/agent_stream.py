@@ -14,7 +14,7 @@ from app.agent_runtime import AgentRuntime, AgentTurn, SubAgentRuntime, SubAgent
 from app.models import AgentHandoff, AgentMemory, AgentMessage, AgentSession, AgentToolCall, BackgroundJob, Course, KnowledgePoint, Question, QuestionAttempt, ReviewItem, StudyGoal, StudySession, StudyTask
 from server.config import get_server_settings
 from server.storage import S3ObjectStorage
-from server.ai_services.agent import infer_actions, is_general_creation_request
+from server.ai_services.agent import is_general_creation_request, plan_actions
 from server.agent_tools import WebAgentToolExecutor
 from server.tenant_session import set_session_tenant
 
@@ -628,7 +628,16 @@ def stream_agent_reply(*, session_factory, tenant_id: str, user_id: str, session
     yield _event("status", {"state": "thinking", "started_at": datetime.now().isoformat()})
     yield _event("activity", {"kind": "context", "state": "running", "label": "Loading context", "detail": f"Reading {len(session_history)} recent messages from this conversation"})
     yield phase("understanding", "正在理解请求")
-    actions = infer_actions(message)
+    # The interactive Agent is model-planned first.  Keyword routing remains
+    # only as the availability fallback inside ``plan_actions``.
+    planner_settings = get_ai_settings()
+    planner_model = None
+    if planner_settings.enabled and planner_settings.api_key.strip():
+        try:
+            planner_model = create_chat_model(planner_settings)
+        except Exception:
+            planner_model = None
+    actions = plan_actions(message, chat_model=planner_model)
     # A request to write a recurring/daily plan with exercises is one atomic
     # learning launch. Keyword routing used to see only “练习题” and queue a
     # question job, leaving the learner without the requested daily tasks.

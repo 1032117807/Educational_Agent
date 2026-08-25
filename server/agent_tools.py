@@ -65,6 +65,10 @@ class WebAgentToolExecutor:
             return self.run_python(str(arguments.get("code", "")))
         if name == "coding.write_workspace":
             return {"message": self.write_workspace_file(str(arguments.get("relative_path", "")), str(arguments.get("content", "")))}
+        if name == "coding.run_workspace_python":
+            return self.run_workspace_python(str(arguments.get("relative_path", "")))
+        if name == "coding.delete_workspace":
+            return {"message": self.delete_workspace_file(str(arguments.get("relative_path", "")))}
         skill_aliases = {
             "skill.resource_analysis": "resource-analysis",
             "skill.learning_plan": "learning-plan",
@@ -181,6 +185,19 @@ class WebAgentToolExecutor:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return f"wrote {path.relative_to(self.workspace).as_posix()}"
+
+    def run_workspace_python(self, relative_path: str) -> dict[str, Any]:
+        path = self._path(relative_path)
+        if path.suffix.lower() != ".py":
+            raise ValueError("only Python workspace files can be run")
+        return self.run_python(self.read_workspace_file(relative_path, MAX_FILE_BYTES))
+
+    def delete_workspace_file(self, relative_path: str) -> str:
+        path = self._path(relative_path)
+        if not path.is_file():
+            raise ValueError("workspace file does not exist")
+        path.unlink()
+        return f"deleted {path.relative_to(self.workspace).as_posix()}"
 
     def run_skill_script(self, skill_name: str, arguments: object) -> dict[str, Any]:
         if not skill_name.replace("-", "").replace("_", "").isalnum():

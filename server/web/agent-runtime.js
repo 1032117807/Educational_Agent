@@ -188,8 +188,36 @@
       const steps = document.createElement('ol'); steps.className = 'agent-coding-steps';
       ['生成代码方案', '校验受限能力', '等待沙箱执行'].forEach(label => { const item = document.createElement('li'); item.textContent = label; steps.appendChild(item); });
       const code = document.createElement('details'); code.className = 'agent-code-preview';
-      const summary = document.createElement('summary'); summary.textContent = '查看生成的临时代码';
-      const pre = document.createElement('pre'); pre.textContent = created.proposal.python_code || '(代码内容为空)'; code.append(summary, pre);
+      const isDiagram = created.proposal.artifact_type === 'mermaid';
+      const source = created.proposal[isDiagram ? 'mermaid_code' : 'python_code'] || '';
+      const summary = document.createElement('summary'); summary.textContent = isDiagram ? 'Mermaid 图表源代码' : '查看生成的临时代码';
+      const pre = document.createElement('pre'); pre.textContent = source || '(代码内容为空)'; code.append(summary, pre);
+      const workspace = document.createElement('section'); workspace.className = 'agent-coding-workspace';
+      const filename = document.createElement('input'); filename.type = 'text'; filename.maxLength = 180;
+      filename.value = isDiagram ? 'diagram.mmd' : 'analysis.py'; filename.setAttribute('aria-label', 'Workspace filename');
+      const editor = document.createElement('textarea'); editor.className = 'agent-workspace-editor'; editor.spellcheck = false; editor.value = source;
+      const fileList = document.createElement('div'); fileList.className = 'agent-workspace-files';
+      const output = document.createElement('pre'); output.className = 'agent-workspace-output';
+      const invokeTool = async (tool_name, arguments, confirmed = false) => request(`/agent/sessions/${state.agentSessionId}/tools`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tool_name, arguments, confirmed }) });
+      const refreshFiles = async () => {
+        try {
+          const result = await invokeTool('mcp.list_workspace_files', { relative_path: '.', limit: 100 }); const files = result.result?.files || [];
+          fileList.replaceChildren(); if (!files.length) fileList.textContent = '工作区为空。';
+          files.forEach(path => {
+            const row = document.createElement('div'); row.className = 'agent-workspace-file';
+            const open = document.createElement('button'); open.type = 'button'; open.className = 'secondary'; open.textContent = path;
+            open.onclick = async () => { const read = await invokeTool('mcp.read_workspace_file', { relative_path: path }); filename.value = path; editor.value = read.result?.content || ''; };
+            const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'secondary'; remove.textContent = '删除';
+            remove.onclick = async () => { if (!confirm(`删除 ${path}？此操作不可恢复。`)) return; await invokeTool('coding.delete_workspace', { relative_path: path }, true); output.textContent = `已删除 ${path}`; refreshFiles(); };
+            row.append(open, remove); fileList.appendChild(row);
+          });
+        } catch (error) { fileList.textContent = `无法读取工作区：${error.message}`; }
+      };
+      const save = document.createElement('button'); save.type = 'button'; save.className = 'secondary'; save.textContent = '保存到工作区';
+      save.onclick = async () => { const path = filename.value.trim(); if (!path) { output.textContent = '请填写文件名。'; return; } if (!confirm(`将写入工作区文件 ${path}。确认保存？`)) return; try { await invokeTool('coding.write_workspace', { relative_path: path, content: editor.value }, true); output.textContent = `已保存 ${path}`; refreshFiles(); } catch (error) { output.textContent = `保存失败：${error.message}`; } };
+      const runSaved = document.createElement('button'); runSaved.type = 'button'; runSaved.className = 'secondary'; runSaved.textContent = '运行已保存的 Python'; runSaved.disabled = isDiagram;
+      runSaved.onclick = async () => { try { const result = await invokeTool('coding.run_workspace_python', { relative_path: filename.value.trim() }); output.textContent = String(result.result?.stdout || result.result?.stderr || '运行完成。'); } catch (error) { output.textContent = `运行失败：${error.message}`; } };
+      workspace.append(filename, save, runSaved, editor, fileList, output); refreshFiles();
       const run = document.createElement('button'); run.type = 'button'; run.className = 'primary'; run.textContent = '运行隔离测试';
       run.onclick = async () => {
         run.disabled = true; run.textContent = '正在运行...'; steps.children[2].textContent = '正在调用 coding.run_python 沙箱';
@@ -202,7 +230,8 @@
           detail.textContent = `${outcome.summary || '运行结束'}\n${output}`; run.textContent = outcome.status === 'completed' ? '测试已完成' : '测试失败';
         } catch (error) { detail.textContent = `运行失败：${error.message}`; run.disabled = false; run.textContent = '重新运行隔离测试'; }
       };
-      card.append(title, steps, code, detail, run); root.appendChild(card); root.scrollTop = root.scrollHeight;
+      if (isDiagram) { run.disabled = true; run.textContent = 'Mermaid 图表无需 Python 运行'; }
+      card.append(title, steps, code, workspace, detail, run); root.appendChild(card); root.scrollTop = root.scrollHeight;
     } catch (error) { appendAgentEvent(`Coding Agent 方案生成失败：${error.message}`); }
   };
 

@@ -5,6 +5,8 @@ def test_web_catalog_includes_desktop_tools_as_companion_dispatched_capabilities
     tools = tools_for_client("web")
     assert tools
     assert any(item["name"] == "coding.run_python" for item in tools)
+    assert any(item["name"] == "coding.run_workspace_python" for item in tools)
+    assert any(item["name"] == "coding.delete_workspace" for item in tools)
     assert any(item["name"] == "desktop.read_file" and item["execution_target"] == "desktop_companion" for item in tools)
     names = {str(item["name"]) for item in tools}
     assert {

@@ -81,6 +81,8 @@ TOOL_CATALOG = (
     AgentTool("skill.report_visualization", "Run report visualization skill", "cloud_sandbox", skill_name="report-visualization"),
     AgentTool("coding.run_python", "Run code in an isolated sandbox", "cloud_sandbox", skill_name="coding"),
     AgentTool("coding.write_workspace", "Write files in the session sandbox workspace", "cloud_sandbox", True, "coding"),
+    AgentTool("coding.run_workspace_python", "Run a Python file saved in the session workspace", "cloud_sandbox", skill_name="coding"),
+    AgentTool("coding.delete_workspace", "Delete a file from the session workspace", "cloud_sandbox", True, "coding"),
     AgentTool("desktop.list_files", "List files on the linked desktop workspace", "desktop_companion"),
     AgentTool("desktop.read_file", "Read a linked desktop workspace file", "desktop_companion"),
     AgentTool("desktop.write_file", "Write a linked desktop workspace file", "desktop_companion", True),

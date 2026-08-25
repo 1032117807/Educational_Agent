@@ -24,6 +24,8 @@ class MetaCodeProposal(BaseModel):
     can_solve: bool
     explanation: str = Field(min_length=1, max_length=800)
     python_code: str = Field(default="", max_length=12_000)
+    artifact_type: Literal["python", "mermaid"] = "python"
+    mermaid_code: str = Field(default="", max_length=12_000)
     expected_output: str = Field(default="", max_length=300)
     publishable: bool = False
     skill_name: str = ""

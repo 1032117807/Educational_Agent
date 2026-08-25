@@ -23,7 +23,8 @@ def propose_web_code(*, model: BaseChatModel, request: str, payload: dict[str, A
     """Produce a temporary program which can only use the supplied payload."""
     prompt = (
         "You are the Web Coding Agent for a learning application. Return the MetaCodeProposal schema. "
-        "Write concise Chinese explanation. The Python program may use only json and the preloaded payload dict, "
+        "Write concise Chinese explanation. For diagram requests, set artifact_type=mermaid and return only valid Mermaid flowchart/sequence/class syntax in mermaid_code; do not generate Python for it. "
+        "For computation requests, set artifact_type=python. The Python program may use only json and the preloaded payload dict, "
         "must print one JSON result, and must not access files, network, subprocesses, dynamic imports, eval, or exec. "
         "Set publishable=false: deployed Web containers do not persist new Skills at runtime.\n"
         f"Request: {request.strip()}\nPayload: {json.dumps(payload, ensure_ascii=False)}"
@@ -39,6 +40,8 @@ def propose_web_code(*, model: BaseChatModel, request: str, payload: dict[str, A
 
 def run_web_code(*, proposal: MetaCodeProposal, payload: dict[str, Any], tenant_id: str, session_id: int) -> dict[str, Any]:
     _validate(proposal)
+    if proposal.artifact_type != "python":
+        raise ValueError("Mermaid diagrams are saved in the workspace; they are not Python programs")
     if not proposal.can_solve or not proposal.python_code.strip():
         raise ValueError("Coding Agent did not produce runnable temporary code")
     program = (
@@ -51,6 +54,12 @@ def run_web_code(*, proposal: MetaCodeProposal, payload: dict[str, Any], tenant_
 
 
 def _validate(proposal: MetaCodeProposal) -> None:
+    if proposal.artifact_type == "mermaid":
+        if not proposal.mermaid_code.strip():
+            raise ValueError("generated Mermaid diagram is empty")
+        if not re.match(r"^\s*(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt)\b", proposal.mermaid_code):
+            raise ValueError("generated Mermaid diagram has an unsupported format")
+        return
     if len(proposal.python_code) > 16_000:
         raise ValueError("generated code is too long")
     for pattern in _BLOCKED_CODE_PATTERNS:
