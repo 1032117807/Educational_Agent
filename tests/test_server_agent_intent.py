@@ -115,6 +115,7 @@ def test_background_web_runtime_retries_a_transient_action_failure(monkeypatch) 
 
 def test_stream_agent_detects_web_memory_and_explicit_artifacts() -> None:
     assert _requests_web_search("请联网搜索资料")
+    assert _requests_web_search("检索下载相关资料和题目")
     assert _requests_web_search("帮我找资料并列出来源")
     assert _memory_candidate("记住我薄弱的是线性代数", None)["category"] == "weak_point"
     assert _requested_artifact("请导出为 markdown 文件", []) == "markdown_report"

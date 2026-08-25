@@ -947,7 +947,7 @@ def _requests_web_search(message: str) -> bool:
     if any(term in value for term in _TIME_SENSITIVE_SEARCH_TERMS) and any(term in value for term in _SCHEDULE_QUERY_TERMS):
         return True
     return any(term in value for term in (
-        "联网", "上网", "搜索", "搜一下", "查找", "找资料", "网上资料", "网页资料",
+        "联网", "上网", "搜索", "搜一下", "查找", "检索", "下载", "找资料", "相关资料", "网上资料", "网页资料",
         "网络资料", "在线资料", "下载资料", "自动下载", "自动导入", "pdf学习资料", "pdf资料", "学习资料", "教材", "课本", "习题答案", "课后答案",
         "web search", "search the web",
     ))
