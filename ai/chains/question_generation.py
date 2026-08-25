@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Protocol
 from uuid import uuid4
 
@@ -12,12 +11,15 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, select
 
+from ai.chains.run_state import fail_run, finish_run
 from ai.retrieval import (
     HybridRetriever,
     KnowledgePointHybridRetriever,
     KnowledgeRetrievalHit,
     RetrievalHit,
 )
+from ai.usage import TokenUsage, track_usage
+from app.core.clock import now
 from app.database import Database
 from app.models import (
     AICitation,
@@ -249,6 +251,8 @@ class QuestionGenerationService:
             resource_ids=resource_ids,
         )
 
+        usage: TokenUsage | None = None
+
         try:
             knowledge_hits = self.knowledge_retriever.retrieve(
                 normalized_request,
@@ -286,7 +290,8 @@ class QuestionGenerationService:
                 ),
             })
 
-            output = self.structured_model.invoke(messages)
+            with track_usage() as usage:
+                output = self.structured_model.invoke(messages)
 
             questions = output.questions[:count]
 
@@ -307,6 +312,7 @@ class QuestionGenerationService:
             self._complete_run(
                 run_id=run_id,
                 draft_ids=draft_ids,
+                usage=usage,
             )
 
             return QuestionGenerationResult(
@@ -317,7 +323,7 @@ class QuestionGenerationService:
             )
 
         except Exception as exc:
-            self._fail_run(run_id, str(exc))
+            self._fail_run(run_id, str(exc), usage=usage)
             raise
 
     @staticmethod
@@ -569,30 +575,32 @@ class QuestionGenerationService:
         *,
         run_id: int,
         draft_ids: list[int],
+        usage: TokenUsage | None = None,
     ) -> None:
         with self.database.session() as session:
             run = session.get(AIRun, run_id)
 
             if run:
-                run.status = "completed"
-                run.output_json = json.dumps({
-                    "draft_ids": draft_ids,
-                    "draft_count": len(draft_ids),
-                }, ensure_ascii=False)
-                run.finished_at = datetime.now()
+                finish_run(
+                    run,
+                    output_json=json.dumps({
+                        "draft_ids": draft_ids,
+                        "draft_count": len(draft_ids),
+                    }, ensure_ascii=False),
+                    usage=usage,
+                )
 
     def _fail_run(
         self,
         run_id: int,
         message: str,
+        usage: TokenUsage | None = None,
     ) -> None:
         with self.database.session() as session:
             run = session.get(AIRun, run_id)
 
             if run:
-                run.status = "failed"
-                run.error_message = message[:4000]
-                run.finished_at = datetime.now()
+                fail_run(run, error_message=message[:4000], usage=usage)
 
 
 
@@ -776,7 +784,7 @@ class QuestionDraftService:
             draft.status = "accepted"
             draft.review_note = review_note.strip()
             draft.accepted_question_id = question.id
-            draft.reviewed_at = datetime.now()
+            draft.reviewed_at = now()
 
             run = session.get(AIRun, draft.ai_run_id)
 
@@ -802,4 +810,4 @@ class QuestionDraftService:
 
             draft.status = "rejected"
             draft.review_note = review_note.strip()
-            draft.reviewed_at = datetime.now()
+            draft.reviewed_at = now()

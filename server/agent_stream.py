@@ -787,6 +787,7 @@ def stream_agent_reply(*, session_factory, tenant_id: str, user_id: str, session
                 f"You are a Chinese learning agent. Today is {date.today().isoformat()}. Respond naturally in Chinese. "
                 "Never describe an older exam notice as current; state its year and say when a date is historical or unverified. "
                 "Use the supplied workspace snapshot as the source of truth. Do not ask the learner to repeat data already in it. "
+                "When confirmed memories are present, use them as durable learner preferences and facts; mention them only when they materially affect the answer. "
                 "First state your intent understanding, cite concrete available counts when relevant, then explain the next actions. "
                 "Do not claim that a queued tool action is completed. "
                 "When web search results are provided, summarize only those results. Explain that the resource-research sub-agent has already searched and checked candidates, and the learner can use the visible one-click confirmation to download a selected item into the course library.\n"

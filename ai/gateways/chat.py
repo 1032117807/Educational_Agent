@@ -4,6 +4,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from ai.config import AISettings
 from ai.exceptions import AIConfigurationError
+from ai.usage import UsageCollector
 
 
 def normalize_openai_base_url(base_url: str) -> str:
@@ -28,6 +29,9 @@ def create_chat_model(settings: AISettings) -> BaseChatModel:
         "temperature": settings.temperature,
         "request_timeout": settings.request_timeout_seconds,
         "max_retries": settings.max_retries,
+        # 挂在模型上而非逐次调用传入，这样 with_structured_output 包装后
+        # 仍能拿到原始响应的 usage。
+        "callbacks": [UsageCollector()],
     }
 
     if settings.base_url:

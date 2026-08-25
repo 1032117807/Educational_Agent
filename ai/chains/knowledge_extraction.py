@@ -4,7 +4,6 @@ import json
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Protocol
 from uuid import uuid4
 
@@ -13,6 +12,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, select
 
+from ai.chains.run_state import fail_run, finish_run
+from ai.usage import TokenUsage, track_usage
+from app.core.clock import now
 from app.database import Database
 from app.models import (
     AICitation,
@@ -139,31 +141,32 @@ class KnowledgeExtractionService:
             raise ValueError("所选范围没有已完成索引的资料片段")
         run_id = self._create_run(course_id, resource_ids, len(chunks))
         merged: dict[str, _MergedPoint] = {}
-        try:
-            batches = [
-                chunks[index:index + self.batch_size]
-                for index in range(0, len(chunks), self.batch_size)
-            ]
-            for batch_index, batch in enumerate(batches):
-                if should_cancel and should_cancel():
-                    raise InterruptedError("知识点抽取已取消")
-                evidence = self._format_evidence(batch)
-                messages = self.prompt.invoke({
-                    "course_name": course_name,
-                    "evidence": evidence,
-                })
-                output = self.structured_model.invoke(messages)
-                self._merge_output(merged, output, batch)
+        with track_usage() as usage:
+            try:
+                batches = [
+                    chunks[index:index + self.batch_size]
+                    for index in range(0, len(chunks), self.batch_size)
+                ]
+                for batch_index, batch in enumerate(batches):
+                    if should_cancel and should_cancel():
+                        raise InterruptedError("知识点抽取已取消")
+                    evidence = self._format_evidence(batch)
+                    messages = self.prompt.invoke({
+                        "course_name": course_name,
+                        "evidence": evidence,
+                    })
+                    output = self.structured_model.invoke(messages)
+                    self._merge_output(merged, output, batch)
+                    if progress:
+                        progress(10 + round((batch_index + 1) * 75 / len(batches)))
+                draft_count = self._persist(run_id, course_id, merged)
+                self._complete_run(run_id, draft_count, usage=usage)
                 if progress:
-                    progress(10 + round((batch_index + 1) * 75 / len(batches)))
-            draft_count = self._persist(run_id, course_id, merged)
-            self._complete_run(run_id, draft_count)
-            if progress:
-                progress(100)
-            return ExtractionResult(run_id, draft_count, len(chunks))
-        except Exception as exc:
-            self._fail_run(run_id, str(exc))
-            raise
+                    progress(100)
+                return ExtractionResult(run_id, draft_count, len(chunks))
+            except Exception as exc:
+                self._fail_run(run_id, str(exc), usage=usage)
+                raise
 
     def extract_selected(
         self,
@@ -330,23 +333,33 @@ class KnowledgeExtractionService:
                         ))
             return len(merged)
 
-    def _complete_run(self, run_id: int, draft_count: int) -> None:
+    def _complete_run(
+        self,
+        run_id: int,
+        draft_count: int,
+        usage: TokenUsage | None = None,
+    ) -> None:
         with self.database.session() as session:
             run = session.get(AIRun, run_id)
             if run:
-                run.status = "completed"
-                run.output_json = json.dumps(
-                    {"draft_count": draft_count}, ensure_ascii=False
+                finish_run(
+                    run,
+                    output_json=json.dumps(
+                        {"draft_count": draft_count}, ensure_ascii=False
+                    ),
+                    usage=usage,
                 )
-                run.finished_at = datetime.now()
 
-    def _fail_run(self, run_id: int, message: str) -> None:
+    def _fail_run(
+        self,
+        run_id: int,
+        message: str,
+        usage: TokenUsage | None = None,
+    ) -> None:
         with self.database.session() as session:
             run = session.get(AIRun, run_id)
             if run:
-                run.status = "failed"
-                run.error_message = message[:4000]
-                run.finished_at = datetime.now()
+                fail_run(run, error_message=message[:4000], usage=usage)
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,7 +477,7 @@ class KnowledgeDraftService:
             draft.status = "accepted"
             draft.review_note = review_note.strip()
             draft.accepted_knowledge_point_id = point_id
-            draft.reviewed_at = datetime.now()
+            draft.reviewed_at = now()
             run = session.get(AIRun, draft.ai_run_id)
             if run:
                 run.user_confirmed = True
@@ -479,4 +492,4 @@ class KnowledgeDraftService:
                 raise ValueError("知识点草稿已经审核")
             draft.status = "rejected"
             draft.review_note = review_note.strip()
-            draft.reviewed_at = datetime.now()
+            draft.reviewed_at = now()

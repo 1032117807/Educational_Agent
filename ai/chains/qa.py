@@ -4,7 +4,6 @@ import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Protocol
 from uuid import uuid4
 
@@ -13,8 +12,11 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from sqlalchemy import delete
 
+from ai.chains.run_state import fail_run, finish_run
 from ai.exceptions import CitationValidationError
 from ai.retrieval import HybridRetriever, RetrievalHit
+from ai.usage import TokenUsage, track_usage
+from app.core.clock import now
 from app.database import Database
 from app.models import AICitation, AIRun
 
@@ -148,9 +150,27 @@ class GroundedQAService:
             resource_ids=resource_ids,
         )
 
+        with track_usage() as usage:
+            return self._ask_tracked(
+                ai_run_id=ai_run_id,
+                question=normalized_question,
+                course_id=course_id,
+                resource_ids=resource_ids,
+                usage=usage,
+            )
+
+    def _ask_tracked(
+        self,
+        *,
+        ai_run_id: int,
+        question: str,
+        course_id: int | None,
+        resource_ids: list[int] | None,
+        usage: TokenUsage,
+    ) -> RAGAnswer:
         try:
             hits = self.retriever.retrieve(
-                normalized_question,
+                question,
                 limit=self.retrieval_limit,
                 course_id=course_id,
                 resource_ids=resource_ids,
@@ -166,12 +186,12 @@ class GroundedQAService:
                     citations=(),
                     insufficient_evidence=True,
                 )
-                self._complete_run(result)
+                self._complete_run(result, usage)
                 return result
 
             evidence = self._format_evidence(hits)
             messages = self.prompt.invoke({
-                "question": normalized_question,
+                "question": question,
                 "evidence": evidence,
             })
 
@@ -197,11 +217,11 @@ class GroundedQAService:
                 insufficient_evidence=model_answer.insufficient_evidence,
             )
 
-            self._complete_run(result)
+            self._complete_run(result, usage)
             return result
 
         except Exception as exc:
-            self._fail_run(ai_run_id, str(exc))
+            self._fail_run(ai_run_id, str(exc), usage)
             raise
 
     @staticmethod
@@ -324,7 +344,11 @@ class GroundedQAService:
 
             return run.id
 
-    def _complete_run(self, result: RAGAnswer) -> None:
+    def _complete_run(
+        self,
+        result: RAGAnswer,
+        usage: TokenUsage | None = None,
+    ) -> None:
         output_json = json.dumps(
             {
                 "answer": result.answer,
@@ -367,15 +391,13 @@ class GroundedQAService:
                     )
                 )
 
-            run.status = "completed"
-            run.output_json = output_json
-            run.error_message = ""
-            run.finished_at = datetime.now()
+            finish_run(run, output_json=output_json, usage=usage)
 
     def _fail_run(
         self,
         ai_run_id: int,
         error_message: str,
+        usage: TokenUsage | None = None,
     ) -> None:
         with self.database.session() as session:
             run = session.get(AIRun, ai_run_id)
@@ -383,6 +405,4 @@ class GroundedQAService:
             if run is None:
                 return
 
-            run.status = "failed"
-            run.error_message = error_message[:4000]
-            run.finished_at = datetime.now()
+            fail_run(run, error_message=error_message[:4000], usage=usage)

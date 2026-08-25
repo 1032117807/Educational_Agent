@@ -11,6 +11,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
 from app.database import Database
+from app.core.clock import now
 from app.models import (
     AIRun,
     ErrorAnalysisResult,
@@ -20,6 +21,8 @@ from app.models import (
     ReviewItem,
     SubjectiveGradingResult,
 )
+from ai.chains.run_state import fail_run, finish_run
+from ai.usage import track_usage
 
 
 ERROR_TYPES = (
@@ -154,8 +157,10 @@ class ErrorAnalysisService:
                 "knowledge_point": knowledge.name if knowledge else "",
                 "grading": json.dumps(grading_data, ensure_ascii=False),
             })
+            usage = None
             try:
-                output = self.model.invoke(messages)
+                with track_usage() as usage:
+                    output = self.model.invoke(messages)
                 self._validate(output, attempt.response)
                 item = ErrorAnalysisResult(
                     ai_run_id=run.id,
@@ -175,13 +180,15 @@ class ErrorAnalysisService:
                     needs_human_review=output.needs_human_review,
                     human_confirmed=False,
                     status="needs_review",
-                    created_at=datetime.now(),
+                    created_at=now(),
                 )
                 session.add(item)
                 session.flush()
-                run.status = "completed"
-                run.output_json = json.dumps(output.model_dump(), ensure_ascii=False)
-                run.finished_at = datetime.now()
+                finish_run(
+                    run,
+                    output_json=json.dumps(output.model_dump(), ensure_ascii=False),
+                    usage=usage,
+                )
                 return ErrorAnalysis(
                     id=item.id, attempt_id=attempt_id,
                     error_types=tuple(output.error_types),
@@ -191,9 +198,7 @@ class ErrorAnalysisService:
                     needs_human_review=output.needs_human_review,
                 )
             except Exception as exc:
-                run.status = "failed"
-                run.error_message = str(exc)[:4000]
-                run.finished_at = datetime.now()
+                fail_run(run, error_message=str(exc)[:4000], usage=usage)
                 raise
 
     @staticmethod

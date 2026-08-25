@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from uuid import uuid4
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -9,6 +9,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from ai.chains.run_state import fail_run, finish_run
+from ai.usage import track_usage
+from app.core.clock import now
 from app.database import Database
 from app.models import (
     AIRun, ErrorAnalysisResult, KnowledgePoint, LearningPlanDraft,
@@ -90,7 +93,7 @@ class PlanGenerationService:
         if daily_minutes < 5:
             raise ValueError("每日可用时间至少为 5 分钟")
 
-        with self.database.session() as session:
+        with track_usage() as usage, self.database.session() as session:
             goal = session.get(StudyGoal, goal_id)
             if goal is None or goal.status != "active":
                 raise ValueError("学习目标不存在或已归档")
@@ -195,14 +198,14 @@ class PlanGenerationService:
                         reason=task.reason.strip(),
                     ))
 
-                run.status = "completed"
-                run.output_json = output.model_dump_json()
-                run.finished_at = datetime.now()
+                finish_run(
+                    run,
+                    output_json=output.model_dump_json(),
+                    usage=usage,
+                )
                 return draft.id
             except Exception as exc:
-                run.status = "failed"
-                run.error_message = str(exc)[:4000]
-                run.finished_at = datetime.now()
+                fail_run(run, error_message=str(exc)[:4000], usage=usage)
                 raise
 
     @staticmethod
@@ -286,7 +289,7 @@ class PlanGenerationService:
                 ))
 
             draft.status = "accepted"
-            draft.confirmed_at = datetime.now()
+            draft.confirmed_at = now()
             run = session.get(AIRun, draft.ai_run_id)
             if run:
                 run.user_confirmed = True

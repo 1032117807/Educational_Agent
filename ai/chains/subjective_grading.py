@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from ai.retrieval import HybridRetriever, RetrievalHit
+from ai.chains.run_state import fail_run, finish_run
+from ai.usage import TokenUsage, track_usage
 from app.database import Database
 from app.models import (
     AICitation,
@@ -173,6 +175,7 @@ class SubjectiveGradingService:
         rubric = rubric or self._default_rubric(max_score)
         self._validate_rubric(rubric, max_score)
         run_id = self._create_run(attempt, question, max_score, rubric)
+        usage: TokenUsage | None = None
         try:
             evidence = self._load_question_evidence(question)
             if not evidence:
@@ -197,7 +200,8 @@ class SubjectiveGradingService:
                 "rubric": self._format_rubric(rubric),
                 "evidence": self._format_evidence(evidence),
             })
-            output = self.structured_model.invoke(messages)
+            with track_usage() as usage:
+                output = self.structured_model.invoke(messages)
             numbers = self._validate_output(
                 output=output,
                 rubric=rubric,
@@ -213,9 +217,10 @@ class SubjectiveGradingService:
                 max_score=max_score,
                 evidence=evidence,
                 evidence_numbers=numbers,
+                usage=usage,
             )
         except Exception as exc:
-            self._fail_run(run_id, str(exc))
+            self._fail_run(run_id, str(exc), usage=usage)
             raise
 
     def _load_attempt(
@@ -437,6 +442,7 @@ class SubjectiveGradingService:
         max_score: float,
         evidence: list[RetrievalHit],
         evidence_numbers: tuple[int, ...],
+        usage: TokenUsage | None,
     ) -> GradingResult:
         with self.database.session() as session:
             result = SubjectiveGradingResult(
@@ -489,15 +495,13 @@ class SubjectiveGradingService:
                 ))
             run = session.get(AIRun, run_id)
             if run:
-                run.status = "completed"
-                run.output_json = json.dumps({
+                finish_run(run, output_json=json.dumps({
                     "grading_result_id": result.id,
                     "total_score": output.total_score,
                     "max_score": max_score,
                     "confidence": output.confidence,
                     "needs_human_review": output.needs_human_review,
-                }, ensure_ascii=False)
-                run.finished_at = datetime.now()
+                }, ensure_ascii=False), usage=usage)
             return GradingResult(
                 grading_result_id=result.id,
                 ai_run_id=run_id,
@@ -510,13 +514,11 @@ class SubjectiveGradingService:
                 citations=tuple(citations),
             )
 
-    def _fail_run(self, run_id: int, message: str) -> None:
+    def _fail_run(self, run_id: int, message: str, *, usage: TokenUsage | None = None) -> None:
         with self.database.session() as session:
             run = session.get(AIRun, run_id)
             if run:
-                run.status = "failed"
-                run.error_message = message[:4000]
-                run.finished_at = datetime.now()
+                fail_run(run, error_message=message[:4000], usage=usage)
 
     def apply_human_review(
         self,
