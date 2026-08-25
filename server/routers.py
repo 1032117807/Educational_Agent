@@ -2354,13 +2354,11 @@ def launch_learning_loop(session_id: int, payload: LearningLaunchRequest, contex
     if session is None:
         raise HTTPException(status_code=404, detail="agent session not found")
     course_id = payload.course_id
-    course_created = False
-    if course_id is not None and db.scalar(select(Course.id).where(Course.id == course_id, Course.tenant_id == context.tenant_id)) is None:
-        raise HTTPException(status_code=404, detail="course not found")
     if course_id is None:
-        course = Course(tenant_id=context.tenant_id, name=_course_title_from_request(payload.request),
-                        subject="AI 自动创建", description=payload.request[:10000])
-        db.add(course); db.flush(); course_id = course.id; course_created = True
+        raise HTTPException(status_code=422, detail="select an existing course before creating an AI learning plan")
+    if db.scalar(select(Course.id).where(Course.id == course_id, Course.tenant_id == context.tenant_id)) is None:
+        raise HTTPException(status_code=404, detail="course not found")
+    course_created = False
     target = payload.target_date or (date.today() + timedelta(days=30))
     if target < date.today():
         raise HTTPException(status_code=422, detail="target_date cannot be in the past")

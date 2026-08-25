@@ -294,12 +294,21 @@
       root.appendChild(card); root.scrollTop = root.scrollHeight;
       return;
     }
+    const selectedCourseId = () => Number(course?.value || payload.course_id || state.activeCourseId || 0);
+    const syncCourseRequirement = () => {
+      const ready = Boolean(selectedCourseId());
+      button.disabled = !ready;
+      if (!ready) card.querySelector('div').textContent = '请先在上方选择要写入的课程。AI 不会自动创建课程，确认后只会写入所选课程。';
+    };
+    syncCourseRequirement();
+    course?.addEventListener('change', syncCourseRequirement, { once: true });
     if (restored) card.querySelector('div').textContent = '此学习任务正在等待你的确认。确认后才会写入课程目标和每日任务。';
     button.onclick = async () => {
       button.disabled = true; button.textContent = '正在确认...';
       try {
-        const selectedCourseId = course?.value ? Number(course.value) : null;
-        const result = await request(`/agent/sessions/${state.agentSessionId}/learning-launch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: payload.title || payload.request.slice(0, 120), request: payload.request, course_id: payload.course_id || selectedCourseId, target_date: payload.target_date, weekly_minutes: payload.weekly_minutes || 420, question_count: payload.question_count || 5, vocabulary_count: 10 }) });
+        const courseId = selectedCourseId();
+        if (!courseId) { syncCourseRequirement(); return; }
+        const result = await request(`/agent/sessions/${state.agentSessionId}/learning-launch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: payload.title || payload.request.slice(0, 120), request: payload.request, course_id: courseId, target_date: payload.target_date, weekly_minutes: payload.weekly_minutes || 420, question_count: payload.question_count || 5, vocabulary_count: 10 }) });
         const steps = (result.workflow_steps || []).map(step => `${step.agent}：${step.detail || step.status}`).join('；');
         card.querySelector('div').textContent = `目标已创建。${steps || `任务编排 Agent 正在生成每日任务。计划任务 #${result.plan_job_id || '—'}。`} ${result.question_job_id ? `出题任务 #${result.question_job_id} 已排队。` : '出题 Agent 会在资料检索并入库后，依据已索引资料出题。'} 运行状态会显示在下方“Agent 运行过程”。`;
         button.textContent = '确认完成';

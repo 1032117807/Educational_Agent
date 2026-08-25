@@ -66,6 +66,9 @@ def test_web_client_assets_and_mount_are_present() -> None:
     assert "bulk-delete-tasks" in script
     assert "task_ids: ids" in script
     assert "agent-course" in script
+    runtime = (root / "agent-runtime.js").read_text(encoding="utf-8")
+    assert "AI 不会自动创建课程" in runtime
+    assert "course_id: courseId" in runtime
     assert 'src="/web/mathjax-config.js"' in page
     assert "<script>" not in page
 
