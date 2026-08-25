@@ -14,6 +14,14 @@
   const text = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
   let dialog;
   let pendingResponse;
+  window.resetAgentRuntime = () => {
+    pendingResponse = null;
+    if (dialog) {
+      dialog.close?.();
+      dialog.remove();
+      dialog = null;
+    }
+  };
 
   const activityIcon = kind => ({ context: '▣', plan: '◇', think: '◎', generate: '✦', tool: '⌁', complete: '✓' }[kind] || '•');
   const activityLabel = value => ({

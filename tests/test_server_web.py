@@ -62,7 +62,7 @@ def test_web_client_assets_and_mount_are_present() -> None:
     assert "localizeStaticProductCopy" in script
     assert "AI 生成题目" in script
     assert "输入学习问题、目标或想让 AI 帮你完成的下一步" in script
-    assert "app.js?v=20260821-release-16" in page
+    assert "app.js?v=20260825-release-18" in page
     assert "bulk-delete-tasks" in script
     assert "task_ids: ids" in script
     assert "agent-course" in script
