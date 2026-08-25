@@ -3,7 +3,7 @@ from datetime import date
 from server.ai_services.agent import infer_actions, plan_actions, run_learning_agent
 from app.database import Database
 from app.models import AgentMemory, AgentMessage, Course, KnowledgePoint, Question, ReviewItem, StudyTask
-from server.agent_stream import _auto_importable_materials, _bounded_session_history, _collect_runtime_context, _is_learning_launch_request, _learning_launch_target_date, _memory_candidate, _requested_artifact, _requests_web_search, _should_use_parallel_subagents, learning_snapshot, rich_response_blocks
+from server.agent_stream import _auto_importable_materials, _bounded_session_history, _collect_runtime_context, _is_learning_launch_request, _learning_launch_target_date, _memory_candidate, _requested_artifact, _requests_web_search, _selected_source_url, _should_use_parallel_subagents, learning_snapshot, rich_response_blocks
 from server.routers import _course_title_from_request
 
 
@@ -61,6 +61,33 @@ def test_public_research_does_not_queue_curation_job_even_with_a_selected_course
     with database.session() as db:
         assert db.query(__import__("app.models", fromlist=["BackgroundJob"]).BackgroundJob).count() == 0
     assert any("Selected: research_curation" in event for event in events)
+
+
+def test_selected_web_source_cannot_queue_unindexed_course_actions(tmp_path, monkeypatch) -> None:
+    database = Database(f"sqlite:///{(tmp_path / 'selected-source.db').as_posix()}")
+    database.create_schema()
+    monkeypatch.setattr("server.agent_stream.create_chat_model", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "server.agent_stream.plan_actions",
+        lambda *_args, **_kwargs: ["research_curation", "knowledge_extraction", "generate_report"],
+    )
+    message = "Use this source for my request: https://www.guojyia.cn"
+    assert _selected_source_url(message) == "https://www.guojyia.cn"
+    with database.session() as db:
+        from app.models import AgentSession
+        session = AgentSession(tenant_id="tenant-a", title="Selected source")
+        db.add(session)
+        db.flush()
+        session_id = session.id
+
+    events = list(__import__("server.agent_stream", fromlist=["stream_agent_reply"]).stream_agent_reply(
+        session_factory=database.session, tenant_id="tenant-a", user_id="user-a",
+        session_id=session_id, message=message, course_id=1,
+    ))
+
+    with database.session() as db:
+        assert db.query(__import__("app.models", fromlist=["BackgroundJob"]).BackgroundJob).count() == 0
+    assert any("Selected: chat" in event for event in events)
 
 
 def test_rich_blocks_turn_chinese_exam_style_questions_into_clickable_quiz_data() -> None:

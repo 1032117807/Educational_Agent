@@ -19,6 +19,17 @@ from server.agent_tools import WebAgentToolExecutor
 from server.tenant_session import set_session_tenant
 
 
+_SOURCE_SELECTION = re.compile(
+    r"^\s*Use this source for my request:\s*(https?://\S+)\s*$", re.I
+)
+
+
+def _selected_source_url(message: str) -> str | None:
+    """Recognize the controlled message emitted by the source-choice UI."""
+    match = _SOURCE_SELECTION.match(message)
+    return match.group(1).rstrip(".,;:)") if match else None
+
+
 def _event(name: str, data: object) -> str:
     return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -646,6 +657,11 @@ def stream_agent_reply(*, session_factory, tenant_id: str, user_id: str, session
         except Exception:
             planner_model = None
     actions = plan_actions(message, chat_model=planner_model)
+    # Source-choice buttons emit a controlled URL-only message. It is not a
+    # request to extract knowledge or generate a report from an unindexed
+    # course, regardless of how a general-purpose planner classifies it.
+    if _selected_source_url(message) is not None:
+        actions = ["chat"]
     # A request to write a recurring/daily plan with exercises is one atomic
     # learning launch. Keyword routing used to see only “练习题” and queue a
     # question job, leaving the learner without the requested daily tasks.
