@@ -746,14 +746,34 @@ async function workspacePanel(courseId, view, data) {
   try {
     let content = '';
     if (view === 'overview') content = `<div class="workspace-overview"><section><h4>学习重点</h4><div class="list">${(data.knowledge || []).slice(0, 6).map(item => `<article class="list-row"><span>${escapeHtml(item.name)}</span><strong>${Number(item.mastery || 0)}%</strong></article>`).join('') || empty('暂未建立知识点。')}</div></section><section><h4>近期任务</h4><div class="course-todo-list">${(data.recent_tasks || []).map(workspaceTaskTodo).join('') || empty('暂无近期任务。')}</div></section></div>`;
-    if (view === 'goals') { const items = await api(`/goals?course_id=${courseId}`); content = `<h4>学习计划</h4><div class="workspace-list">${items.map(item => `<article class="list-row"><div><strong>${escapeHtml(item.title)}</strong><div class="task-meta">截止 ${learningDate(item.target_date)} · 每周 ${Number(item.weekly_minutes || 0)} 分钟</div></div><strong>${Number(item.progress || 0)}%</strong></article>`).join('') || empty('暂未设置计划。')}</div>`; }
-    if (view === 'knowledge') { const items = await api(`/knowledge-points?course_id=${courseId}`); content = `<h4>知识结构</h4><div class="workspace-list">${items.map(item => `<article class="list-row"><div><strong>${escapeHtml(item.name)}</strong><div class="task-meta">${escapeHtml(item.category || '未分类')} · 难度 ${Number(item.difficulty || 0)}/5</div></div><strong>${Number(item.mastery || 0)}%</strong></article>`).join('') || empty('暂未建立知识点。')}</div>`; }
-    if (view === 'resources') { const items = await api(`/resources?course_id=${courseId}`); content = `<h4>课程资料</h4><div class="workspace-list">${items.map(item => `<article class="list-row"><div><strong>${escapeHtml(item.name)}</strong><div class="task-meta">${Math.ceil(Number(item.size || 0) / 1024)} KB · 已关联本课程</div></div><span class="task-meta">可在 AI 助手中提问</span></article>`).join('') || empty('还没有导入资料。')}</div>`; }
+    if (view === 'goals') { const items = await api(`/goals?course_id=${courseId}`); content = `<div class="section-head"><h4>学习计划</h4><button type="button" class="primary" data-workspace-action="add-goal">新建目标</button></div><div class="workspace-list">${items.map(item => `<article class="list-row"><div><strong>${escapeHtml(item.title)}</strong><div class="task-meta">截止 ${learningDate(item.target_date)} · 每周 ${Number(item.weekly_minutes || 0)} 分钟</div></div><strong>${Number(item.progress || 0)}%</strong></article>`).join('') || empty('暂未设置计划。先创建一个学习目标，再生成每天可执行的任务。')}</div>`; }
+    if (view === 'knowledge') { const items = await api(`/knowledge-points?course_id=${courseId}`); content = `<div class="section-head"><h4>知识结构</h4><button type="button" class="primary" data-workspace-action="add-knowledge">新增知识点</button></div><div class="workspace-list">${items.map(item => `<article class="list-row"><div><strong>${escapeHtml(item.name)}</strong><div class="task-meta">${escapeHtml(item.category || '未分类')} · 难度 ${Number(item.difficulty || 0)}/5</div></div><strong>${Number(item.mastery || 0)}%</strong></article>`).join('') || empty('暂未建立知识点。可以手动添加，也可以先上传资料后提取。')}</div>`; }
+    if (view === 'resources') { const items = await api(`/resources?course_id=${courseId}`); content = `<div class="section-head"><h4>课程资料</h4><button type="button" class="primary" data-workspace-action="upload-resource">上传资料</button></div><div class="workspace-list">${items.map(item => `<article class="list-row"><div><strong>${escapeHtml(item.name)}</strong><div class="task-meta">${Math.ceil(Number(item.size || 0) / 1024)} KB · 已关联本课程</div></div><span class="task-meta">可在 AI 助手中提问</span></article>`).join('') || empty('还没有导入资料。上传并完成索引后，才能进行证据检索和出题。')}</div>`; }
     if (view === 'practice') { const items = await api(`/questions?course_id=${courseId}`); content = `<h4>练习题</h4><div class="workspace-list">${items.slice(0, 10).map(item => `<article class="list-row"><div><strong>${escapeHtml(item.prompt)}</strong><div class="task-meta">${escapeHtml(item.kind || '练习')} · 难度 ${Number(item.difficulty || 0)}</div></div></article>`).join('') || empty('暂无练习题。可让 AI 根据课程资料生成题目。')}</div>`; }
     if (view === 'mistakes') { const items = await api(`/mistakes?course_id=${courseId}`); content = `<h4>错题复盘</h4><div class="workspace-list">${items.map(item => `<article class="list-row"><div><strong>${escapeHtml(item.title)}</strong><div class="task-meta">${escapeHtml(item.error_type || '待分析')} · 错 ${Number(item.wrong_count || 0)} 次</div></div><span class="task-meta">${learningDate(item.next_review)}</span></article>`).join('') || empty('还没有错题记录。')}</div>`; }
     if (view === 'notes') { const items = await api(`/courses/${courseId}/notes`); content = `<h4>课程笔记</h4><div class="workspace-list">${items.map(item => `<article class="note-card"><strong>${escapeHtml(item.title || '未命名笔记')}</strong><div class="note-content">${escapeHtml(item.content || '')}</div></article>`).join('') || empty('还没有课程笔记。')}</div>`; }
     if (view === 'analytics') { const summary = (await api(`/analytics?days=30&course_id=${courseId}`)).summary || {}; content = `<h4>近 30 天学习分析</h4><div class="metrics compact-metrics">${[['学习时间', `${Number(summary.study_minutes || 0)} 分钟`], ['任务完成', `${Number(summary.tasks_completed || 0)}/${Number(summary.tasks_total || 0)}`], ['练习正确率', `${Number(summary.accuracy || 0)}%`], ['待复习', `${Number(summary.due_reviews || 0)} 项`]].map(([label, value]) => `<article class="metric"><div class="label">${label}</div><div class="value">${value}</div></article>`).join('')}</div>`; }
     root.innerHTML = content;
+    root.querySelectorAll('[data-workspace-action]').forEach(button => {
+      button.onclick = async () => {
+        const action = button.dataset.workspaceAction;
+        if (action === 'upload-resource') return openView('resources');
+        openView('goals');
+        await loadGoals();
+        if (action === 'add-goal') {
+          const course = $('#goal-course');
+          if (course) course.value = String(courseId);
+          $('#goal-form')?.classList.remove('hidden');
+          $('#goal-form [name=title]')?.focus();
+        }
+        if (action === 'add-knowledge') {
+          const course = $('#knowledge-course');
+          if (course) course.value = String(courseId);
+          $('#knowledge-point-form')?.classList.remove('hidden');
+          $('#knowledge-point-form [name=name]')?.focus();
+        }
+      };
+    });
     root.querySelectorAll('[data-workspace-task]').forEach(input => { input.onchange = async () => { if (!input.checked) return; input.disabled = true; try { await api(`/tasks/${input.dataset.workspaceTask}/action`, { method: 'POST', body: JSON.stringify({ action: 'complete' }) }); flash('任务已完成'); await openCourse(courseId); } catch (error) { input.checked = false; input.disabled = false; flash(error.message); } }; });
   } catch (error) { root.innerHTML = `<div class="workspace-empty error-text">加载失败：${escapeHtml(error.message)}</div>`; } finally { root.removeAttribute('aria-busy'); }
 }

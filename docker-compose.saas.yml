@@ -13,12 +13,14 @@ services:
       OBJECT_STORAGE_BUCKET: learning
       OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:-learning-admin}
       OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:-replace-with-a-long-minio-password}
-      LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY: "false"
+      LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY: ${LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY:-false}
       # PaddleOCR is intentionally excluded from the core SaaS image. Enable
       # the compatible vision OCR provider for scanned documents instead.
       LEARNING_AI_OCR_ENABLED: "false"
       LEARNING_WEB_CODING_ENABLED: "false"
     command: python -m uvicorn server.main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./models/fastembed:/app/models/fastembed:ro
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -45,9 +47,11 @@ services:
       OBJECT_STORAGE_BUCKET: learning
       OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:-learning-admin}
       OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:-replace-with-a-long-minio-password}
-      LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY: "false"
+      LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY: ${LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY:-false}
       LEARNING_AI_OCR_ENABLED: "false"
     command: python -m server.run_worker
+    volumes:
+      - ./models/fastembed:/app/models/fastembed:ro
     depends_on:
       postgres:
         condition: service_healthy

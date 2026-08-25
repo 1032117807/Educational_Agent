@@ -2387,11 +2387,12 @@ def launch_learning_loop(session_id: int, payload: LearningLaunchRequest, contex
     indexed_evidence = db.scalar(select(func.count()).select_from(DocumentChunk).where(
         DocumentChunk.tenant_id == context.tenant_id, DocumentChunk.course_id == course_id,
     )) or 0
-    plan_job = None
-    if indexed_evidence:
-        plan_job = BackgroundJob(tenant_id=context.tenant_id, requested_by=context.user_id, job_type="ai_feature", status="queued",
-            payload=json.dumps({"tenant_id": context.tenant_id, "feature": "learning_plan", "data": {"goal_id": goal.id, "course_id": course_id, "request": payload.request}}, ensure_ascii=False), detail="queued by task-scheduling agent from indexed course materials")
-        db.add(plan_job); db.flush()
+    # Planning uses the learner's goal, task history and mastery snapshot. It
+    # must not wait for a document upload; only generated questions require
+    # indexed evidence.
+    plan_job = BackgroundJob(tenant_id=context.tenant_id, requested_by=context.user_id, job_type="ai_feature", status="queued",
+        payload=json.dumps({"tenant_id": context.tenant_id, "feature": "learning_plan", "data": {"goal_id": goal.id, "course_id": course_id, "request": payload.request}}, ensure_ascii=False), detail="queued by task-scheduling agent")
+    db.add(plan_job); db.flush()
     question_job_id = None
     vocabulary_job_id = None
     if indexed_evidence:
@@ -2408,7 +2409,7 @@ def launch_learning_loop(session_id: int, payload: LearningLaunchRequest, contex
     return {"course_id": course_id, "course_created": course_created, "goal_id": goal.id, "plan_job_id": plan_job.id if plan_job else None, "question_job_id": question_job_id, "vocabulary_job_id": vocabulary_job_id, "source_items": source_items,
             "target_date": target.isoformat(), "status": "queued", "workflow_steps": [
                 {"agent": "资料检索 Agent", "status": "ready", "detail": "检索并筛选高相关学习资料；导入需你确认"},
-                {"agent": "任务编排 Agent", "status": "queued" if plan_job else "waiting_for_material", "detail": "仅在资料索引后生成学习者的每日任务"},
+                {"agent": "任务编排 Agent", "status": "queued", "detail": "结合学习目标、任务历史和掌握度生成每日任务"},
                 {"agent": "出题 Agent", "status": "queued" if question_job_id else "waiting_for_material", "detail": "依据已索引资料出题"},
             ]}
 

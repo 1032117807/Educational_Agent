@@ -42,7 +42,8 @@ class FastEmbedEmbeddings(Embeddings):
         self.normalize_embeddings = normalize_embeddings
         self.batch_size = batch_size
         resolved_model_dir = model_dir.expanduser().resolve()
-        if local_files_only and not resolved_model_dir.is_dir():
+        model_file = resolved_model_dir / "model_optimized.onnx"
+        if local_files_only and not model_file.is_file():
             raise RuntimeError(
                 f"本地 ONNX 模型目录不存在：{resolved_model_dir}"
             )
@@ -51,7 +52,7 @@ class FastEmbedEmbeddings(Embeddings):
             "providers": ["CPUExecutionProvider"],
             "lazy_load": True,
         }
-        if resolved_model_dir.is_dir():
+        if model_file.is_file():
             arguments["specific_model_path"] = str(resolved_model_dir)
         else:
             arguments["cache_dir"] = str(resolved_model_dir.parent)

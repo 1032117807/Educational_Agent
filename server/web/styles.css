@@ -39,10 +39,14 @@
 .agent-run-status.waiting .agent-phase-spinner{animation:none;border-color:var(--blue);border-right-color:transparent}.agent-run-status.waiting{border-color:#b9d7ed;background:#f3f9fd}
 .job-status{min-width:0}.job-status .answer-text{max-height:210px;overflow-y:auto;margin:10px 0;padding-right:8px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65}.job-status .citation-list{max-height:300px;overflow-y:auto;padding-right:8px}.job-status .citation{overflow-wrap:anywhere;line-height:1.6}.job-status .citation-list::-webkit-scrollbar,.job-status .answer-text::-webkit-scrollbar{width:8px}.job-status .citation-list::-webkit-scrollbar-thumb,.job-status .answer-text::-webkit-scrollbar-thumb{background:#b8c7d1;border-radius:99px}@media(max-width:760px){.job-status .answer-text{max-height:180px}.job-status .citation-list{max-height:240px}}
 @media(max-width:760px){
-  .app-shell,.sidebar,.workspace{min-width:0;width:100%}
-  .sidebar{overflow:hidden}
-  .sidebar nav{min-width:0;flex:1;white-space:nowrap}
+  .app-shell{min-width:0;width:100%;min-height:0;align-content:start}
+  .sidebar,.workspace{min-width:0;width:100%}
+  .sidebar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 12px;align-items:center;overflow:visible}
+  .sidebar .wordmark{grid-column:1;margin:0;padding:0}
+  .sidebar nav{grid-column:1/-1;display:flex;min-width:0;flex:initial;flex-wrap:wrap;gap:4px;white-space:normal}
   .sidebar .nav-group-label{display:none}
-  .sidebar .nav-item{flex:0 0 auto;white-space:nowrap}
-  .sidebar .icon-button{flex:0 0 auto}
+  .sidebar .nav-item{flex:0 0 auto;padding:7px 8px;font-size:12px;white-space:nowrap}
+  .sidebar .icon-button{grid-column:2;grid-row:1;margin:0;padding:4px 0;line-height:1;font-size:0}
+  .sidebar .icon-button::after{content:'退出';font-size:13px;font-weight:700}
 }
+.course-task-check{position:relative}
