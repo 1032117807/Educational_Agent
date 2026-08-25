@@ -660,7 +660,8 @@ def stream_agent_reply(*, session_factory, tenant_id: str, user_id: str, session
     # Source-choice buttons emit a controlled URL-only message. It is not a
     # request to extract knowledge or generate a report from an unindexed
     # course, regardless of how a general-purpose planner classifies it.
-    if _selected_source_url(message) is not None:
+    selected_source_url = _selected_source_url(message)
+    if selected_source_url is not None:
         actions = ["chat"]
     # A request to write a recurring/daily plan with exercises is one atomic
     # learning launch. Keyword routing used to see only “练习题” and queue a
@@ -787,6 +788,19 @@ def stream_agent_reply(*, session_factory, tenant_id: str, user_id: str, session
                 error = observation.get("error") or {}
                 yield _event("activity", {"kind": "tool", "state": "failed", "label": "Tool: web search", "detail": str(error.get("message", error))})
                 yield _event("tool", {"name": tool_name, "state": "failed", "error": str(error.get("message", error))})
+    if selected_source_url is not None:
+        # The source-choice control is an explicit request to use this URL.
+        # The import endpoint resolves an HTML catalogue to a real supported
+        # file before it creates any resource or queues indexing.
+        source_request = next((
+            str(item.get("content", "")) for item in reversed(session_history)
+            if item.get("role") == "user" and _selected_source_url(str(item.get("content", ""))) is None
+        ), message)
+        yield _event("auto_import", {
+            "course_id": course_id,
+            "request": source_request,
+            "items": [{"url": selected_source_url, "title": "Selected learning source"}],
+        })
     if learning_launch_flow:
         yield _event("learning_launch", learning_launch_payload)
     memory_candidate = _memory_candidate(message, course_id)

@@ -58,3 +58,16 @@ def test_research_candidates_are_assessed_then_imported_after_confirmation(tmp_p
     assert imported["status"] == "imported"
     assert imported["resource_id"] == index.resource_ids[0]
     database.close()
+
+
+def test_download_link_parser_finds_hydrated_menu_file_endpoints() -> None:
+    page = '''
+      <button data-download="/files/cet6-2025.pdf">Download</button>
+      <script>window.__DATA__={"word":"https:\\/\\/cdn.example.test/download?id=42"}</script>
+      <a href="/article/overview">Overview</a>
+    '''
+
+    assert ResearchCurationService._download_links_from_html(page, "https://example.test/exams") == [
+        "https://example.test/files/cet6-2025.pdf",
+        "https://cdn.example.test/download?id=42",
+    ]

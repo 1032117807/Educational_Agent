@@ -152,7 +152,7 @@
     const items = Array.isArray(payload?.items) ? payload.items : [];
     if (!state.agentSessionId || !items.length) return;
     const userMessages = document.querySelectorAll('.agent-message.user div');
-    const learningRequest = userMessages.length ? userMessages[userMessages.length - 1].textContent : '';
+    const learningRequest = payload?.request || (userMessages.length ? userMessages[userMessages.length - 1].textContent : '');
     setLearningWorkflowStatus('正在导入资料', `资料检索 Agent 正在处理 ${items.length} 个候选来源。`);
     appendAgentEvent(`资料检索 Agent 正在自动下载 ${items.length} 份学习文件，并关联到匹配课程；没有匹配课程时会新建课程。`);
     let imported = 0;

@@ -7,6 +7,7 @@ import os
 import re
 import socket
 import tempfile
+from html.parser import HTMLParser
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +38,21 @@ class CandidateAssessment(BaseModel):
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
         return None
+
+
+class _DownloadLinkParser(HTMLParser):
+    """Extract file links emitted by static or hydrated download menus."""
+
+    URL_ATTRIBUTES = {"href", "data-url", "data-download", "data-file", "data-href"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.values: list[str] = []
+
+    def handle_starttag(self, _tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        for name, value in attrs:
+            if name.casefold() in self.URL_ATTRIBUTES and value:
+                self.values.append(value)
 
 
 class ResearchCurationService:
@@ -235,9 +251,30 @@ class ResearchCurationService:
         return not any((ip.is_private, ip.is_loopback, ip.is_link_local, ip.is_multicast, ip.is_reserved, ip.is_unspecified))
 
     @classmethod
-    def _download_public_file(cls, url: str, target: Path) -> None:
+    def _download_links_from_html(cls, page: str, base_url: str) -> list[str]:
+        """Find direct files and common download endpoints in rendered markup."""
+        parser = _DownloadLinkParser()
+        parser.feed(page)
+        parser.close()
+        parser.values.extend(re.findall(r'''https?:\\?/\\?/[^\s"'<>]+''', page, flags=re.I))
+        parser.values.extend(re.findall(r'''["']([^"']+)["']''', page))
+        file_suffix = re.compile(r"\.(?:pdf|docx?|pptx?|xlsx?|txt)(?:[?#].*)?$", re.I)
+        endpoint_signal = re.compile(r"(?:download|attachment|export|file|resource)(?:[/?=&]|$)", re.I)
+        results: list[str] = []
+        for raw in parser.values:
+            candidate = urljoin(base_url, unquote(raw.replace("\\/", "/")).strip())
+            if candidate.startswith("https://") and (file_suffix.search(candidate) or endpoint_signal.search(candidate)) and candidate not in results:
+                results.append(candidate)
+        return results[:24]
+
+    @classmethod
+    def _download_public_file(cls, url: str, target: Path, _seen: set[str] | None = None) -> None:
         if not cls._is_public_https_url(url):
             raise ValueError("Only public HTTPS resources may be imported")
+        seen = _seen or set()
+        if url in seen or len(seen) >= 4:
+            raise ValueError("Unable to resolve a downloadable learning file")
+        seen.add(url)
         request = Request(url, headers={"User-Agent": "PersonalLearningDesktop/1.0"})
         opener = build_opener(_NoRedirect())
         with opener.open(request, timeout=30) as response:
@@ -249,11 +286,13 @@ class ResearchCurationService:
                 page = response.read(cls.MAX_DOWNLOAD_BYTES + 1)
                 if len(page) > cls.MAX_DOWNLOAD_BYTES:
                     raise ValueError("Resource page is larger than 8 MB")
-                links = re.findall(r'''href=["']([^"'#?]+(?:\.pdf)(?:\?[^"']*)?)["']''', page.decode("utf-8", errors="ignore"), flags=re.I)
-                for link in links:
-                    candidate = urljoin(url, unquote(link).strip())
-                    if candidate.lower().split("?", 1)[0].endswith(".pdf"):
-                        return cls._download_public_file(candidate, target)
+                links = cls._download_links_from_html(page.decode("utf-8", errors="ignore"), url)
+                for candidate in links:
+                    if cls._is_public_https_url(candidate):
+                        try:
+                            return cls._download_public_file(candidate, target, seen)
+                        except ValueError:
+                            continue
                 raise ValueError("该资料页未找到可下载的 PDF 文件")
             suffix = cls.ALLOWED_CONTENT_TYPES.get(content_type)
             if suffix is None:

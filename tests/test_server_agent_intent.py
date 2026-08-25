@@ -88,6 +88,7 @@ def test_selected_web_source_cannot_queue_unindexed_course_actions(tmp_path, mon
     with database.session() as db:
         assert db.query(__import__("app.models", fromlist=["BackgroundJob"]).BackgroundJob).count() == 0
     assert any("Selected: chat" in event for event in events)
+    assert any("event: auto_import" in event and "https://www.guojyia.cn" in event for event in events)
 
 
 def test_rich_blocks_turn_chinese_exam_style_questions_into_clickable_quiz_data() -> None:
