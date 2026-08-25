@@ -866,13 +866,13 @@ def stream_agent_reply(*, session_factory, tenant_id: str, user_id: str, session
         # questions alone and incorrectly report that approved actions ran.
         # Coding proposals are prepared and exercised directly by the browser
         # workspace. They are not a background learning workflow.
-        # A course-less research action has already produced public sources in
-        # this stream. Only queue research curation when a selected course can
-        # supply indexed evidence; otherwise no background work is needed.
+        # Public research has already completed in this stream. Indexed-course
+        # curation is dependency-driven by the resource index worker, so never
+        # send a generic research action to a backend that may have no chunks.
         has_background_action = any(
             action not in {"chat", "meta_code", "research_curation"}
             for action in actions
-        ) or ("research_curation" in actions and course_id is not None)
+        )
         if has_background_action and not already_started and not learning_launch_requested and not pending_request and not (
             "generate_plan" in actions and "generate_questions" in actions
         ):

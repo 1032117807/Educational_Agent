@@ -41,7 +41,7 @@ def test_plain_chat_does_not_queue_a_redundant_background_agent_job(tmp_path, mo
     assert any("Selected: chat" in event for event in events)
 
 
-def test_course_less_public_research_does_not_queue_curation_job(tmp_path, monkeypatch) -> None:
+def test_public_research_does_not_queue_curation_job_even_with_a_selected_course(tmp_path, monkeypatch) -> None:
     database = Database(f"sqlite:///{(tmp_path / 'public-research.db').as_posix()}")
     database.create_schema()
     monkeypatch.setattr("server.agent_stream.create_chat_model", lambda *_args, **_kwargs: None)
@@ -55,7 +55,7 @@ def test_course_less_public_research_does_not_queue_curation_job(tmp_path, monke
 
     events = list(__import__("server.agent_stream", fromlist=["stream_agent_reply"]).stream_agent_reply(
         session_factory=database.session, tenant_id="tenant-a", user_id="user-a",
-        session_id=session_id, message="find CET-6 public resources", course_id=None,
+        session_id=session_id, message="find CET-6 public resources", course_id=1,
     ))
 
     with database.session() as db:
@@ -141,7 +141,7 @@ def test_public_research_does_not_call_course_scoped_curation_without_a_course(m
     assert result["actions"] == [{
         "feature": "research_curation",
         "status": "completed",
-        "detail": "Public-source research is complete in this conversation. Select a course only when you want to import or curate course materials.",
+        "detail": "Public-source research is complete in this conversation. Imported materials are curated after their course index is ready.",
     }]
     assert result["runtime"]["status"] == "completed"
 

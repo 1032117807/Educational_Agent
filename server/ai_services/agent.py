@@ -167,14 +167,15 @@ def run_learning_agent(
     def execute_action(action: str) -> dict[str, object]:
         if action in {"chat", "agent_chat"}:
             return {"feature": action, "status": "completed", "detail": "streaming response already delivered"}
-        if action == "research_curation" and data.get("course_id") is None:
+        if action == "research_curation":
             # Public-source research is performed in the streamed conversation.
-            # The background feature is intentionally course-scoped because it
-            # curates indexed course evidence, so it must not run here.
+            # Course curation is only meaningful after a successful import has
+            # produced indexed evidence; that dependent workflow is launched
+            # by the index worker, never by this generic Agent job.
             return {
                 "feature": action,
                 "status": "completed",
-                "detail": "Public-source research is complete in this conversation. Select a course only when you want to import or curate course materials.",
+                "detail": "Public-source research is complete in this conversation. Imported materials are curated after their course index is ready.",
             }
         if action == "generate_questions":
             course_id = data.get("course_id")
