@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from server.config import ServerSettings
 from server.main import create_app
+from server.routers import _course_title_from_request
 
 
 def test_web_client_assets_and_mount_are_present() -> None:
@@ -67,10 +68,16 @@ def test_web_client_assets_and_mount_are_present() -> None:
     assert "task_ids: ids" in script
     assert "agent-course" in script
     runtime = (root / "agent-runtime.js").read_text(encoding="utf-8")
-    assert "AI 不会自动创建课程" in runtime
+    assert "按学习主题创建一门新课程" in runtime
     assert "course_id: courseId" in runtime
     assert 'src="/web/mathjax-config.js"' in page
     assert "<script>" not in page
+
+
+def test_ai_course_title_uses_learning_subject_not_schedule_instruction() -> None:
+    assert _course_title_from_request("基于当前《高等数学：极限与导数》课程资料，制定未来 7 天每日任务") == "高等数学：极限与导数"
+    assert _course_title_from_request("制定未来 7 天每日任务，围绕极限的定义安排练习") == "高等数学：极限的定义"
+    assert _course_title_from_request("帮我自动下载适合 CET-6 听力和阅读练习的资料") == "大学英语六级：听力与阅读"
 
 
 def test_default_compose_does_not_mount_docker_socket() -> None:

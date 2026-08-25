@@ -284,12 +284,29 @@ class AgentMessageRequest(BaseModel):
 
 
 def _course_title_from_request(request: str) -> str:
-    """Create a readable course title instead of storing an Agent command."""
+    """Derive a stable learning subject, never a scheduling instruction, as a course title."""
     import re
+
     text = re.sub(r"\s+", " ", request).strip()
-    text = re.sub(r"^(请|帮我|给我|立即|现在)?(生成|制定|创建|安排|开始)(一周|第一周|每日|学习)?(的)?", "", text)
-    text = re.sub(r"(学习计划|练习题|题目|任务).*$", "", text).strip(" ：:，,。")
-    return text[:80] or "AI 学习课程"
+    explicit = re.search(r"[《\"]([^》\"]{2,80})[》\"]", text)
+    if explicit:
+        return explicit.group(1).strip()
+
+    if re.search(r"\b(?:cet[- ]?6|大学英语六级)\b", text, re.IGNORECASE):
+        focus = "听力与阅读" if "听力" in text and "阅读" in text else "备考"
+        return f"大学英语六级：{focus}"
+
+    topic = re.search(r"围绕\s*([^，。；;：:]{2,60}?)(?:安排|制定|生成|学习|练习|复习|，|。|；|;|$)", text)
+    if topic:
+        value = topic.group(1).strip(" ：:，,。")
+        if value:
+            prefix = "高等数学" if any(word in value for word in ("极限", "导数", "积分", "函数", "矩阵")) else "专题学习"
+            return f"{prefix}：{value}"[:80]
+
+    subject = re.sub(r"^(请|帮我|给我|立即|现在)?(生成|制定|创建|安排|开始)", "", text)
+    subject = re.sub(r"(?:未来|接下来)?\s*\d+\s*天.*$", "", subject)
+    subject = re.sub(r"(学习计划|练习题|题目|任务).*$", "", subject).strip(" ：:，,。")
+    return subject[:80] or "AI 学习课程"
 
 
 class LearningLaunchRequest(BaseModel):
@@ -2354,11 +2371,13 @@ def launch_learning_loop(session_id: int, payload: LearningLaunchRequest, contex
     if session is None:
         raise HTTPException(status_code=404, detail="agent session not found")
     course_id = payload.course_id
-    if course_id is None:
-        raise HTTPException(status_code=422, detail="select an existing course before creating an AI learning plan")
-    if db.scalar(select(Course.id).where(Course.id == course_id, Course.tenant_id == context.tenant_id)) is None:
-        raise HTTPException(status_code=404, detail="course not found")
     course_created = False
+    if course_id is not None and db.scalar(select(Course.id).where(Course.id == course_id, Course.tenant_id == context.tenant_id)) is None:
+        raise HTTPException(status_code=404, detail="course not found")
+    if course_id is None:
+        course = Course(tenant_id=context.tenant_id, name=_course_title_from_request(payload.request),
+                        subject="AI 自动创建", description=payload.request[:10000])
+        db.add(course); db.flush(); course_id = course.id; course_created = True
     target = payload.target_date or (date.today() + timedelta(days=30))
     if target < date.today():
         raise HTTPException(status_code=422, detail="target_date cannot be in the past")
