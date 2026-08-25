@@ -2,11 +2,13 @@ from __future__ import annotations
 from uuid import uuid4
 import hashlib
 import json
+import re
 import tempfile
+from collections import Counter
 from io import BytesIO
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -19,7 +21,13 @@ from app.models import (
     AIRun,
     AuditEvent,
     Course,
+    CourseNote,
     KnowledgePoint,
+    KnowledgePointDraft,
+    KnowledgePointDraftCitation,
+    QuestionDraft,
+    QuestionDraftCitation,
+    LearningEvent,
     Organization,
     OrganizationMember,
     PracticeSession,
@@ -30,6 +38,7 @@ from app.models import (
     ReviewAttempt,
     ReviewItem,
     ResourceFile,
+    DocumentChunk,
     StudyGoal,
     StudySession,
     StudyTask,
@@ -51,6 +60,36 @@ from ai.config import get_ai_settings
 from server.web_coding import propose_web_code, run_web_code
 
 router = APIRouter(prefix="/v1")
+
+CHOICE_QUESTION_KINDS = {"single_choice", "multiple_choice", "true_false"}
+SUPPORTED_QUESTION_KINDS = {
+    "single_choice", "multiple_choice", "true_false", "fill_blank",
+    "short_answer", "calculation", "essay", "reading",
+}
+
+
+def _ensure_web_coding_enabled() -> None:
+    if not get_server_settings().web_coding_enabled:
+        raise HTTPException(status_code=503, detail="Coding Agent is disabled in this deployment")
+
+
+def _choice_token(value: str) -> str:
+    normalized = " ".join(value.strip().casefold().split())
+    if normalized in {"true", "t", "正确", "对", "是"}:
+        return "true"
+    if normalized in {"false", "f", "错误", "错", "否"}:
+        return "false"
+    match = re.match(r"^([a-z])(?:[.、):：\s]|$)", normalized)
+    return match.group(1) if match else normalized
+
+
+def _normalized_answer(value: str, kind: str) -> str | tuple[str, ...]:
+    if kind == "multiple_choice":
+        tokens = {_choice_token(part) for part in re.split(r"[,;|\n]+", value) if part.strip()}
+        return tuple(sorted(tokens))
+    if kind in CHOICE_QUESTION_KINDS:
+        return _choice_token(value)
+    return " ".join(value.strip().casefold().split())
 class RegisterRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=10, max_length=200)
@@ -75,6 +114,16 @@ class CourseRequest(BaseModel):
     subject: str = Field(default="其他", max_length=60)
 
 
+class CourseNoteRequest(BaseModel):
+    title: str = Field(default="学习笔记", min_length=1, max_length=160)
+    content: str = Field(default="", max_length=50000)
+
+
+class CourseNoteUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    content: str | None = Field(default=None, max_length=50000)
+
+
 class OrganizationMemberRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     role: str = Field(default="member", pattern="^(admin|member)$")
@@ -92,6 +141,24 @@ class TaskRequest(BaseModel):
     scheduled_time: str = Field(default="", max_length=5)
     note: str = Field(default="", max_length=10000)
     course_id: int | None = None
+    knowledge_point_id: int | None = Field(default=None, gt=0)
+
+
+class TaskBulkDeleteRequest(BaseModel):
+    task_ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class TaskUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    planned_date: date | None = None
+    duration_minutes: int | None = Field(default=None, ge=1, le=1440)
+    scheduled_time: str | None = Field(default=None, max_length=5)
+    priority: str | None = Field(default=None, max_length=20)
+    note: str | None = Field(default=None, max_length=10000)
+
+
+class TaskActionRequest(BaseModel):
+    action: str = Field(pattern="^(start|complete|postpone|skip)$")
 
 
 class QuestionRequest(BaseModel):
@@ -103,6 +170,7 @@ class QuestionRequest(BaseModel):
     tags: str = Field(default="", max_length=300)
     difficulty: int = Field(default=3, ge=1, le=5)
     course_id: int | None = None
+    knowledge_point_id: int | None = Field(default=None, gt=0)
 
 
 class GoalRequest(BaseModel):
@@ -123,9 +191,24 @@ class KnowledgePointRequest(BaseModel):
     importance: int = Field(default=3, ge=1, le=5)
 
 
+class KnowledgeDraftReviewRequest(BaseModel):
+    action: str = Field(pattern="^(accept|reject)$")
+    review_note: str = Field(default="", max_length=10000)
+
+
+class QuestionDraftReviewRequest(BaseModel):
+    action: str = Field(pattern="^(accept|reject)$")
+    review_note: str = Field(default="", max_length=10000)
+
+
 class PracticeStartRequest(BaseModel):
     question_ids: list[int] = Field(min_length=1, max_length=100)
     course_id: int | None = None
+
+
+class PracticeRecommendationRequest(BaseModel):
+    course_id: int | None = None
+    limit: int = Field(default=10, ge=1, le=30)
 
 
 class PracticeAttemptRequest(BaseModel):
@@ -162,15 +245,18 @@ class RagRequest(BaseModel):
 
 class AiQuestionGenerationRequest(BaseModel):
     course_id: int
+    knowledge_point_id: int | None = Field(default=None, gt=0)
     request: str = Field(min_length=1, max_length=4000)
     count: int = Field(default=5, ge=1, le=20)
     difficulty: int = Field(default=3, ge=1, le=5)
     kinds: list[str] = Field(default_factory=lambda: ["single_choice", "short_answer"], min_length=1, max_length=4)
+    resource_ids: list[int] = Field(default_factory=list, max_length=20)
 
 
 class AiFeatureRequest(BaseModel):
     feature: str = Field(pattern="^(knowledge_extraction|subjective_grading|error_analysis|learning_plan|learning_report|research_curation|agent_chat)$")
     course_id: int | None = None
+    resource_ids: list[int] = Field(default_factory=list, max_length=20)
     attempt_id: int | None = None
     goal_id: int | None = None
     request: str = Field(default="", max_length=4000)
@@ -252,6 +338,29 @@ def record_audit(
         target_id=target_id,
         detail=json.dumps(detail or {}, ensure_ascii=False),
     ))
+
+
+def record_learning_event(
+    db: DbSession,
+    context: CurrentContext,
+    event_type: str,
+    *,
+    course_id: int | None = None,
+    task_id: int | None = None,
+    question_id: int | None = None,
+    knowledge_point_id: int | None = None,
+    payload: dict[str, object] | None = None,
+) -> None:
+    db.add(LearningEvent(
+        tenant_id=context.tenant_id,
+        user_id=context.user_id,
+        event_type=event_type,
+        course_id=course_id,
+        task_id=task_id,
+        question_id=question_id,
+        knowledge_point_id=knowledge_point_id,
+        payload_json=json.dumps(payload or {}, ensure_ascii=False),
+    ))
 @router.post("/auth/register", status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, db: DbSession) -> dict[str, str]:
     email = str(payload.email).lower()
@@ -307,7 +416,9 @@ def logout(payload: RefreshRequest, db: DbSession) -> None:
 def me(context: CurrentContext, db: DbSession) -> dict[str, str]:
     user = db.get(User, context.user_id)
     if user is None: raise HTTPException(status_code=404, detail="user not found")
-    return {"id": user.id, "email": user.email, "tenant_id": context.tenant_id, "display_name": user.display_name, "role": context.role}
+    organization = db.get(Organization, context.tenant_id)
+    return {"id": user.id, "email": user.email, "tenant_id": context.tenant_id, "display_name": user.display_name,
+            "role": context.role, "organization_name": organization.name if organization else "Learning Space"}
 
 
 @router.get("/organization/members")
@@ -464,6 +575,451 @@ def dashboard(
     }
 
 
+@router.get("/today")
+def today_learning_center(context: CurrentContext, db: DbSession) -> dict[str, object]:
+    """Return the real, cross-module data used by the daily learning center."""
+    today = date.today()
+    tasks = db.scalars(select(StudyTask).where(
+        StudyTask.tenant_id == context.tenant_id,
+        StudyTask.planned_date == today,
+    ).order_by(StudyTask.completed, StudyTask.priority, StudyTask.id)).all()
+    due_reviews = db.scalars(select(ReviewItem).where(
+        ReviewItem.tenant_id == context.tenant_id,
+        ReviewItem.status.not_in(("archived", "mastered")),
+        ReviewItem.next_review <= today,
+    ).order_by(ReviewItem.next_review, ReviewItem.id).limit(50)).all()
+    weak_points = db.scalars(select(KnowledgePoint).where(
+        KnowledgePoint.tenant_id == context.tenant_id,
+        KnowledgePoint.mastery < 70,
+    ).order_by(KnowledgePoint.mastery, KnowledgePoint.importance.desc(), KnowledgePoint.id).limit(8)).all()
+    start_at = datetime.combine(today - timedelta(days=1), datetime.min.time())
+    end_at = datetime.combine(today, datetime.min.time())
+    yesterday = db.scalars(select(PracticeSession).where(
+        PracticeSession.tenant_id == context.tenant_id,
+        PracticeSession.started_at >= start_at,
+        PracticeSession.started_at < end_at,
+        PracticeSession.status == "completed",
+    )).all()
+    recent_reviews = db.scalars(select(ReviewItem).where(
+        ReviewItem.tenant_id == context.tenant_id,
+        ReviewItem.status != "archived",
+    ).order_by(ReviewItem.created_at.desc(), ReviewItem.id.desc()).limit(30)).all()
+    error_counts = Counter(
+        item.error_reason.strip() for item in recent_reviews if item.error_reason and item.error_reason.strip()
+    )
+    focus_areas = [name for name, _count in error_counts.most_common(3)]
+    yesterday_total = sum(item.total for item in yesterday)
+    yesterday_correct = sum(item.correct for item in yesterday)
+    planned_minutes = sum(item.duration_minutes for item in tasks)
+    completed_minutes = sum(item.duration_minutes for item in tasks if item.completed)
+    accuracy = round(yesterday_correct * 100 / yesterday_total, 1) if yesterday_total else None
+    task_context = _task_context(db, context, tasks)
+    recommended_minutes = max(10, min(45, len(due_reviews) * 5 + len(weak_points[:3]) * 5))
+    if accuracy is not None:
+        insight_parts = [f"昨天完成 {yesterday_total} 道题，正确率 {accuracy}%"]
+        if weak_points:
+            insight_parts.append(f"今天优先复习 {weak_points[0].name}")
+        if focus_areas:
+            insight_parts.append(f"近期常见错误：{'、'.join(focus_areas)}")
+        insight = "。".join(insight_parts) + f"。建议先安排约 {recommended_minutes} 分钟。"
+    elif weak_points:
+        insight = f"当前掌握度最低的是 {weak_points[0].name}，建议先安排约 {recommended_minutes} 分钟专项练习。"
+    elif due_reviews:
+        insight = f"今天有 {len(due_reviews)} 项复习到期，建议先完成约 {recommended_minutes} 分钟复习。"
+    else:
+        insight = "完成一次练习后，系统会根据真实答题结果生成今日建议。"
+    return {
+        "date": today.isoformat(),
+        "summary": {"planned_minutes": planned_minutes, "completed_minutes": completed_minutes,
+                     "completion_rate": round(completed_minutes * 100 / planned_minutes, 1) if planned_minutes else 0.0},
+        "tasks": [_serialize_task(item, task_context) for item in tasks],
+        "reviews": {"due": len(due_reviews), "items": [{"id": item.id, "title": item.title,
+                   "question_id": item.question_id, "wrong_count": item.wrong_count,
+                   "next_review": item.next_review.isoformat()} for item in due_reviews]},
+        "weak_points": [{"id": item.id, "course_id": item.course_id, "name": item.name,
+                         "mastery": item.mastery, "importance": item.importance} for item in weak_points],
+        "insight": {"text": insight, "yesterday_accuracy": accuracy,
+                    "focus_areas": focus_areas, "recommended_minutes": recommended_minutes},
+        "reminders": _build_reminders(context, db),
+    }
+
+
+def _build_reminders(context: CurrentContext, db: DbSession) -> list[dict[str, object]]:
+    """Build actionable reminders from current records; never fabricate notifications."""
+    today = date.today()
+    reminders: list[dict[str, object]] = []
+    tasks = db.scalars(select(StudyTask).where(
+        StudyTask.tenant_id == context.tenant_id,
+        StudyTask.completed.is_(False),
+        StudyTask.planned_date <= today,
+    ).order_by(StudyTask.planned_date, StudyTask.id).limit(50)).all()
+    for task in tasks:
+        if task.scheduled_time and task.planned_date == today:
+            reminders.append({"id": f"task-fixed-{task.id}", "type": "fixed", "title": task.title,
+                              "message": f"{task.title} · {task.duration_minutes} min",
+                              "course_id": task.course_id, "task_id": task.id,
+                              "due_at": f"{task.planned_date.isoformat()}T{task.scheduled_time}"})
+        if task.source == "ai" and task.planned_date == today:
+            reminders.append({"id": f"task-plan-{task.id}", "type": "learning_plan", "title": task.title,
+                              "message": "学习计划中的任务仍未完成", "course_id": task.course_id, "task_id": task.id,
+                              "due_at": task.planned_date.isoformat()})
+        if task.planned_date < today:
+            reminders.append({"id": f"task-overdue-{task.id}", "type": "incomplete", "title": task.title,
+                              "message": f"已逾期 { (today - task.planned_date).days } 天，建议延期或完成",
+                              "course_id": task.course_id, "task_id": task.id,
+                              "due_at": task.planned_date.isoformat()})
+    reviews = db.scalars(select(ReviewItem).where(
+        ReviewItem.tenant_id == context.tenant_id,
+        ReviewItem.status.not_in(("archived", "mastered")),
+        ReviewItem.next_review <= today,
+    ).order_by(ReviewItem.next_review, ReviewItem.id).limit(30)).all()
+    if reviews:
+        reminders.append({"id": "review-due", "type": "review", "title": "今日待复习",
+                          "message": f"有 {len(reviews)} 个复习项目进入周期", "review_count": len(reviews),
+                          "due_at": today.isoformat()})
+    goals = db.scalars(select(StudyGoal).where(
+        StudyGoal.tenant_id == context.tenant_id,
+        StudyGoal.target_date >= today,
+        StudyGoal.target_date <= today + timedelta(days=7),
+        StudyGoal.status.not_in(("completed", "archived")),
+    ).order_by(StudyGoal.target_date, StudyGoal.id).limit(20)).all()
+    for goal in goals:
+        reminders.append({"id": f"goal-deadline-{goal.id}", "type": "deadline", "title": goal.title,
+                          "message": f"目标截止日期：{goal.target_date.isoformat()}", "goal_id": goal.id,
+                          "course_id": goal.course_id, "due_at": goal.target_date.isoformat()})
+    return reminders[:100]
+
+
+@router.get("/reminders")
+def list_reminders(context: CurrentContext, db: DbSession) -> list[dict[str, object]]:
+    return _build_reminders(context, db)
+
+
+@router.get("/analytics")
+def learning_analytics(
+    context: CurrentContext,
+    db: DbSession,
+    days: int | str = 7,
+    course_id: int | None = None,
+) -> dict[str, object]:
+    """Return explainable learning trends for 7 days, 30 days, or all time."""
+    all_time = str(days).lower() in {"all", "0"}
+    if not all_time:
+        try:
+            days = int(days)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="days must be 7, 30, or all") from exc
+        if days not in {7, 30}:
+            raise HTTPException(status_code=422, detail="days must be 7, 30, or all")
+    end_date = date.today()
+    if all_time:
+        earliest = []
+        earliest_study = db.scalar(select(func.min(StudySession.started_at)).where(StudySession.tenant_id == context.tenant_id))
+        earliest_task = db.scalar(select(func.min(StudyTask.planned_date)).where(StudyTask.tenant_id == context.tenant_id))
+        earliest_attempt = db.scalar(select(func.min(QuestionAttempt.attempted_at)).where(QuestionAttempt.tenant_id == context.tenant_id))
+        for value in (earliest_study, earliest_task, earliest_attempt):
+            if value is not None:
+                earliest.append(value.date() if isinstance(value, datetime) else value)
+        start_date = min(earliest) if earliest else end_date
+    else:
+        start_date = end_date - timedelta(days=int(days) - 1)
+    if course_id is not None and db.scalar(select(Course.id).where(
+        Course.id == course_id, Course.tenant_id == context.tenant_id
+    )) is None:
+        raise HTTPException(status_code=404, detail="course not found")
+    begin = datetime.combine(start_date, datetime.min.time())
+    finish = datetime.combine(end_date + timedelta(days=1), datetime.min.time())
+    study_statement = select(StudySession).where(
+        StudySession.tenant_id == context.tenant_id,
+        StudySession.started_at >= begin,
+        StudySession.started_at < finish,
+    )
+    task_statement = select(StudyTask).where(
+        StudyTask.tenant_id == context.tenant_id,
+        StudyTask.planned_date >= start_date,
+        StudyTask.planned_date <= end_date,
+    )
+    attempt_statement = select(QuestionAttempt).where(
+        QuestionAttempt.tenant_id == context.tenant_id,
+        QuestionAttempt.attempted_at >= begin,
+        QuestionAttempt.attempted_at < finish,
+    )
+    if course_id is not None:
+        study_statement = study_statement.where(StudySession.course_id == course_id)
+        task_statement = task_statement.where(StudyTask.course_id == course_id)
+        attempt_statement = attempt_statement.join(Question, Question.id == QuestionAttempt.question_id).where(Question.course_id == course_id)
+    studies = db.scalars(study_statement).all()
+    tasks = db.scalars(task_statement).all()
+    attempts = [item for item in db.scalars(attempt_statement).all() if item.correct is not None]
+    reviews = db.scalars(select(ReviewItem).where(
+        ReviewItem.tenant_id == context.tenant_id,
+        ReviewItem.status != "archived",
+    )).all()
+    if course_id is not None:
+        reviews = [item for item in reviews if item.question_id and db.scalar(
+            select(Question.course_id).where(Question.id == item.question_id)
+        ) == course_id]
+    daily = {} if all_time else {start_date + timedelta(days=index): {"minutes": 0, "questions": 0, "correct": 0}
+                                  for index in range(int(days))}
+    for item in studies:
+        daily.setdefault(item.started_at.date(), {"minutes": 0, "questions": 0, "correct": 0})
+        daily[item.started_at.date()]["minutes"] += item.duration_minutes
+    for item in attempts:
+        daily.setdefault(item.attempted_at.date(), {"minutes": 0, "questions": 0, "correct": 0})
+        daily[item.attempted_at.date()]["questions"] += 1
+        daily[item.attempted_at.date()]["correct"] += int(item.correct is True)
+    error_types: dict[str, int] = {}
+    for item in reviews:
+        if item.next_review <= end_date and item.status != "mastered":
+            error_types[item.error_reason or "unknown"] = error_types.get(item.error_reason or "unknown", 0) + item.wrong_count
+    weak = db.scalars(select(KnowledgePoint).where(
+        KnowledgePoint.tenant_id == context.tenant_id,
+        KnowledgePoint.mastery < 70,
+        *( [KnowledgePoint.course_id == course_id] if course_id is not None else [] ),
+    ).order_by(KnowledgePoint.mastery, KnowledgePoint.id).limit(10)).all()
+    total = len(attempts)
+    correct = sum(item.correct is True for item in attempts)
+    return {
+        "range": {"start": start_date.isoformat(), "end": end_date.isoformat(), "days": "all" if all_time else days},
+        "summary": {"study_minutes": sum(item.duration_minutes for item in studies),
+                    "tasks_total": len(tasks), "tasks_completed": sum(item.completed for item in tasks),
+                    "questions": total, "accuracy": round(correct * 100 / total, 1) if total else 0.0,
+                    "due_reviews": sum(1 for item in reviews if item.next_review <= end_date and item.status != "mastered")},
+        "daily": [{"date": day.isoformat(), "minutes": values["minutes"], "questions": values["questions"],
+                   "accuracy": round(values["correct"] * 100 / values["questions"], 1) if values["questions"] else 0.0}
+                  for day, values in sorted(daily.items())],
+        "error_types": [{"type": name, "count": count} for name, count in sorted(error_types.items(), key=lambda item: -item[1])],
+        "weak_points": [{"id": item.id, "name": item.name, "mastery": item.mastery,
+                         "practice_count": item.practice_count, "confidence": item.confidence} for item in weak],
+    }
+
+
+@router.get("/weekly-report")
+def weekly_learning_report(
+    context: CurrentContext,
+    db: DbSession,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    course_id: int | None = None,
+) -> dict[str, object]:
+    """Return a deterministic, tenant-scoped weekly report from real records.
+
+    The AI report job can add narrative later, but this endpoint is the
+    authoritative numeric snapshot used by the product UI and exports.
+    """
+    report_end = end_date or date.today()
+    report_start = start_date or (report_end - timedelta(days=6))
+    if report_end < report_start:
+        raise HTTPException(status_code=422, detail="end_date must not be earlier than start_date")
+    if (report_end - report_start).days > 30:
+        raise HTTPException(status_code=422, detail="weekly report range cannot exceed 31 days")
+    if course_id is not None and db.scalar(select(Course.id).where(
+        Course.id == course_id, Course.tenant_id == context.tenant_id
+    )) is None:
+        raise HTTPException(status_code=404, detail="course not found")
+
+    begin = datetime.combine(report_start, datetime.min.time())
+    finish = datetime.combine(report_end + timedelta(days=1), datetime.min.time())
+    tasks_statement = select(StudyTask).where(
+        StudyTask.tenant_id == context.tenant_id,
+        StudyTask.planned_date >= report_start,
+        StudyTask.planned_date <= report_end,
+    )
+    studies_statement = select(StudySession).where(
+        StudySession.tenant_id == context.tenant_id,
+        StudySession.started_at >= begin,
+        StudySession.started_at < finish,
+    )
+    practices_statement = select(PracticeSession).where(
+        PracticeSession.tenant_id == context.tenant_id,
+        PracticeSession.started_at >= begin,
+        PracticeSession.started_at < finish,
+        PracticeSession.status == "completed",
+    )
+    review_attempts_statement = select(ReviewAttempt).where(
+        ReviewAttempt.tenant_id == context.tenant_id,
+        ReviewAttempt.created_at >= begin,
+        ReviewAttempt.created_at < finish,
+    )
+    if course_id is not None:
+        tasks_statement = tasks_statement.where(StudyTask.course_id == course_id)
+        studies_statement = studies_statement.where(StudySession.course_id == course_id)
+        practices_statement = practices_statement.where(PracticeSession.course_id == course_id)
+        review_attempts_statement = review_attempts_statement.join(
+            ReviewItem, ReviewItem.id == ReviewAttempt.review_item_id
+        ).join(Question, Question.id == ReviewItem.question_id, isouter=True).where(
+            Question.course_id == course_id
+        )
+    tasks = db.scalars(tasks_statement).all()
+    studies = db.scalars(studies_statement).all()
+    practices = db.scalars(practices_statement).all()
+    review_attempts = db.scalars(review_attempts_statement).all()
+    question_total = sum(item.total for item in practices)
+    question_correct = sum(item.correct for item in practices)
+    task_total = len(tasks)
+    task_completed = sum(1 for item in tasks if item.completed)
+    weak_statement = select(KnowledgePoint).where(
+        KnowledgePoint.tenant_id == context.tenant_id,
+        KnowledgePoint.mastery < 70,
+    )
+    if course_id is not None:
+        weak_statement = weak_statement.where(KnowledgePoint.course_id == course_id)
+    weak_statement = weak_statement.order_by(
+        KnowledgePoint.mastery, KnowledgePoint.importance.desc(), KnowledgePoint.id
+    ).limit(8)
+    weak_points = db.scalars(weak_statement).all()
+    wrong_reviews = sum(1 for item in review_attempts if item.result == "wrong")
+    correct_reviews = sum(1 for item in review_attempts if item.result in {"correct", "mastered"})
+
+    daily: dict[date, dict[str, int]] = {
+        report_start + timedelta(days=offset): {"minutes": 0, "tasks_completed": 0, "questions": 0}
+        for offset in range((report_end - report_start).days + 1)
+    }
+    for item in studies:
+        daily.setdefault(item.started_at.date(), {"minutes": 0, "tasks_completed": 0, "questions": 0})["minutes"] += max(0, item.duration_minutes)
+    for item in tasks:
+        if item.completed:
+            daily[item.planned_date]["tasks_completed"] += 1
+    for item in practices:
+        daily.setdefault(item.started_at.date(), {"minutes": 0, "tasks_completed": 0, "questions": 0})["questions"] += item.total
+
+    accuracy = round(question_correct * 100 / question_total, 1) if question_total else 0.0
+    completion_rate = round(task_completed * 100 / task_total, 1) if task_total else 0.0
+    recommendations: list[str] = []
+    if weak_points:
+        recommendations.append(f"优先练习 {weak_points[0].name}，当前掌握度 {weak_points[0].mastery}%。")
+    if question_total and accuracy < 70:
+        recommendations.append("最近正确率低于 70%，先安排基础题和错题复习，再逐步提高难度。")
+    if task_total and completion_rate < 70:
+        recommendations.append("本周计划完成率偏低，建议把下周任务拆成更短的学习单元。")
+    if not recommendations:
+        recommendations.append("数据还不足以提出个性化调整，完成一次练习或学习任务后再生成报告。")
+    return {
+        "range": {"start": report_start.isoformat(), "end": report_end.isoformat()},
+        "course_id": course_id,
+        "has_data": bool(tasks or studies or practices or review_attempts or weak_points),
+        "summary": {
+            "study_minutes": sum(max(0, item.duration_minutes) for item in studies),
+            "tasks_total": task_total,
+            "tasks_completed": task_completed,
+            "task_completion_rate": completion_rate,
+            "questions": question_total,
+            "correct": question_correct,
+            "accuracy": accuracy,
+            "reviews_total": len(review_attempts),
+            "reviews_correct": correct_reviews,
+            "reviews_wrong": wrong_reviews,
+        },
+        "weak_points": [{"id": item.id, "name": item.name, "mastery": item.mastery,
+                         "practice_count": item.practice_count, "wrong_count": item.wrong_count} for item in weak_points],
+        "recommendations": recommendations,
+        "daily": [{"date": day.isoformat(), **values} for day, values in sorted(daily.items())],
+    }
+
+
+@router.get("/courses/{course_id}/workspace")
+def course_workspace(course_id: int, context: CurrentContext, db: DbSession) -> dict[str, object]:
+    course = db.scalar(select(Course).where(Course.id == course_id, Course.tenant_id == context.tenant_id))
+    if course is None:
+        raise HTTPException(status_code=404, detail="course not found")
+    goals = db.scalars(select(StudyGoal).where(StudyGoal.tenant_id == context.tenant_id,
+                                                StudyGoal.course_id == course_id).order_by(StudyGoal.target_date)).all()
+    points = db.scalars(select(KnowledgePoint).where(KnowledgePoint.tenant_id == context.tenant_id,
+                                                     KnowledgePoint.course_id == course_id).order_by(KnowledgePoint.mastery, KnowledgePoint.id)).all()
+    tasks = db.scalars(select(StudyTask).where(StudyTask.tenant_id == context.tenant_id,
+                                               StudyTask.course_id == course_id).order_by(StudyTask.planned_date.desc(), StudyTask.id.desc()).limit(10)).all()
+    question_count = db.scalar(select(func.count()).select_from(Question).where(
+        Question.tenant_id == context.tenant_id, Question.course_id == course_id, Question.archived.is_(False))) or 0
+    resource_count = db.scalar(select(func.count()).select_from(ResourceFile).where(
+        ResourceFile.tenant_id == context.tenant_id, ResourceFile.course_id == course_id, ResourceFile.trashed.is_(False))) or 0
+    mistake_count = db.scalar(select(func.count()).select_from(ReviewItem).join(
+        Question, Question.id == ReviewItem.question_id
+    ).where(ReviewItem.tenant_id == context.tenant_id, ReviewItem.status != "archived",
+            Question.tenant_id == context.tenant_id, Question.course_id == course_id)) or 0
+    completed_practice = db.scalars(select(PracticeSession).where(
+        PracticeSession.tenant_id == context.tenant_id, PracticeSession.course_id == course_id,
+        PracticeSession.status == "completed"
+    ).order_by(PracticeSession.finished_at.desc(), PracticeSession.id.desc()).limit(8)).all()
+    task_context = _task_context(db, context, tasks)
+    return {"course": {"id": course.id, "name": course.name, "subject": course.subject,
+                        "description": course.description, "target_date": course.target_date.isoformat() if course.target_date else None,
+                        "target_score": course.target_score, "progress": course.progress},
+            "goals": [{"id": goal.id, "title": goal.title, "target_date": goal.target_date.isoformat(),
+                       "progress": goal.progress, "status": goal.status} for goal in goals],
+            "knowledge": [{"id": point.id, "name": point.name, "mastery": point.mastery,
+                           "difficulty": point.difficulty, "importance": point.importance} for point in points],
+            "recent_tasks": [_serialize_task(task, task_context) for task in tasks],
+            "question_count": question_count,
+            "resource_count": resource_count,
+            "mistake_count": mistake_count,
+            "practice": {"sessions": len(completed_practice), "questions": sum(item.total for item in completed_practice),
+                          "correct": sum(item.correct for item in completed_practice),
+                          "accuracy": round(sum(item.correct for item in completed_practice) * 100 / sum(item.total for item in completed_practice), 1)
+                          if sum(item.total for item in completed_practice) else 0.0}}
+
+
+def _task_context(db: DbSession, context: CurrentContext, tasks: list[StudyTask]) -> dict[str, dict[int, object]]:
+    """Resolve display metadata without trusting cross-tenant foreign keys."""
+    course_ids = {task.course_id for task in tasks if task.course_id is not None}
+    point_ids = {task.knowledge_point_id for task in tasks if task.knowledge_point_id is not None}
+    courses = db.scalars(select(Course).where(Course.tenant_id == context.tenant_id, Course.id.in_(course_ids))).all() if course_ids else []
+    points = db.scalars(select(KnowledgePoint).where(KnowledgePoint.tenant_id == context.tenant_id, KnowledgePoint.id.in_(point_ids))).all() if point_ids else []
+    return {"courses": {item.id: item for item in courses}, "points": {item.id: item for item in points}}
+
+
+def _serialize_task(task: StudyTask, task_context: dict[str, dict[int, object]]) -> dict[str, object]:
+    course = task_context["courses"].get(task.course_id)
+    point = task_context["points"].get(task.knowledge_point_id)
+    return {
+        "id": task.id,
+        "title": task.title,
+        "course_id": task.course_id,
+        "course_name": course.name if course else None,
+        "knowledge_point_id": task.knowledge_point_id,
+        "knowledge_point_name": point.name if point else None,
+        "source": task.source,
+        "note": task.note,
+        "task_type": task.task_type,
+        "status": task.status,
+        "started_at": task.started_at.isoformat() if task.started_at else None,
+        "planned_date": task.planned_date.isoformat(),
+        "duration_minutes": task.duration_minutes,
+        "scheduled_time": task.scheduled_time,
+        "priority": task.priority,
+        "completed": task.completed,
+    }
+
+
+@router.get("/mistakes")
+def list_mistakes(context: CurrentContext, db: DbSession, course_id: int | None = None) -> list[dict[str, object]]:
+    statement = select(ReviewItem, Question, KnowledgePoint).join(
+        Question, Question.id == ReviewItem.question_id, isouter=True
+    ).join(KnowledgePoint, KnowledgePoint.id == Question.knowledge_point_id, isouter=True).where(
+        ReviewItem.tenant_id == context.tenant_id, ReviewItem.source != "vocabulary",
+        ReviewItem.status != "archived",
+    )
+    if course_id is not None:
+        statement = statement.where(Question.course_id == course_id)
+    rows = db.execute(statement.order_by(ReviewItem.next_review, ReviewItem.id)).all()
+    result = []
+    for item, question, point in rows:
+        latest_attempt = db.scalar(select(QuestionAttempt).where(
+            QuestionAttempt.tenant_id == context.tenant_id,
+            QuestionAttempt.question_id == item.question_id,
+            QuestionAttempt.correct.is_(False),
+        ).order_by(QuestionAttempt.attempted_at.desc(), QuestionAttempt.id.desc())) if item.question_id else None
+        result.append({"id": item.id, "question_id": item.question_id, "title": item.title,
+                       "user_answer": latest_attempt.response if latest_attempt else "",
+                       "correct_answer": question.answer if question else "",
+                       "error_type": item.error_reason or "unknown", "knowledge_point": point.name if point else None,
+                       "wrong_count": item.wrong_count, "next_review": item.next_review.isoformat(),
+                       "created_at": item.created_at.isoformat() if item.created_at else None,
+                       "last_reviewed_at": item.last_reviewed_at.isoformat() if item.last_reviewed_at else None,
+                       "note": item.note, "ai_analysis": item.ai_analysis,
+                       "status": item.status})
+    return result
+
+
 @router.get("/audit-events")
 def list_audit_events(
     context: CurrentContext, db: DbSession, limit: int = 100
@@ -502,29 +1058,99 @@ def create_course(payload: CourseRequest, context: CurrentContext, db: DbSession
     return {"id": course.id, "name": course.name, "tenant_id": context.tenant_id}
 
 
+def _serialize_course_note(note: CourseNote) -> dict[str, object]:
+    return {
+        "id": note.id,
+        "course_id": note.course_id,
+        "title": note.title,
+        "content": note.content,
+        "created_at": note.created_at.isoformat() if note.created_at else None,
+        "updated_at": note.updated_at.isoformat() if note.updated_at else None,
+    }
+
+
+def _get_course_for_context(course_id: int, context: CurrentContext, db: DbSession) -> Course:
+    course = db.scalar(select(Course).where(Course.id == course_id, Course.tenant_id == context.tenant_id))
+    if course is None:
+        raise HTTPException(status_code=404, detail="course not found")
+    return course
+
+
+@router.get("/courses/{course_id}/notes")
+def list_course_notes(course_id: int, context: CurrentContext, db: DbSession) -> list[dict[str, object]]:
+    _get_course_for_context(course_id, context, db)
+    notes = db.scalars(
+        select(CourseNote).where(
+            CourseNote.tenant_id == context.tenant_id,
+            CourseNote.course_id == course_id,
+        ).order_by(CourseNote.updated_at.desc(), CourseNote.id.desc())
+    ).all()
+    return [_serialize_course_note(note) for note in notes]
+
+
+@router.post("/courses/{course_id}/notes", status_code=status.HTTP_201_CREATED)
+def create_course_note(
+    course_id: int, payload: CourseNoteRequest, context: CurrentContext, db: DbSession
+) -> dict[str, object]:
+    _get_course_for_context(course_id, context, db)
+    note = CourseNote(
+        tenant_id=context.tenant_id,
+        course_id=course_id,
+        title=payload.title.strip(),
+        content=payload.content,
+    )
+    db.add(note)
+    db.flush()
+    record_audit(db, context, "course_note.create", "course_note", str(note.id), {"course_id": course_id})
+    db.commit()
+    db.refresh(note)
+    return _serialize_course_note(note)
+
+
+@router.patch("/course-notes/{note_id}")
+def update_course_note(
+    note_id: int, payload: CourseNoteUpdateRequest, context: CurrentContext, db: DbSession
+) -> dict[str, object]:
+    note = db.scalar(select(CourseNote).where(CourseNote.id == note_id, CourseNote.tenant_id == context.tenant_id))
+    if note is None:
+        raise HTTPException(status_code=404, detail="course note not found")
+    if payload.title is not None:
+        note.title = payload.title.strip()
+    if payload.content is not None:
+        note.content = payload.content
+    record_audit(db, context, "course_note.update", "course_note", str(note.id), {"course_id": note.course_id})
+    db.commit()
+    db.refresh(note)
+    return _serialize_course_note(note)
+
+
+@router.delete("/course-notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_course_note(note_id: int, context: CurrentContext, db: DbSession) -> None:
+    note = db.scalar(select(CourseNote).where(CourseNote.id == note_id, CourseNote.tenant_id == context.tenant_id))
+    if note is None:
+        raise HTTPException(status_code=404, detail="course note not found")
+    record_audit(db, context, "course_note.delete", "course_note", str(note.id), {"course_id": note.course_id})
+    db.delete(note)
+    db.commit()
+
+
 @router.get("/tasks")
 def list_tasks(
     context: CurrentContext,
     db: DbSession,
     start: date | None = None,
     end: date | None = None,
+    course_id: int | None = None,
 ) -> list[dict[str, object]]:
     statement = select(StudyTask).where(StudyTask.tenant_id == context.tenant_id)
     if start is not None:
         statement = statement.where(StudyTask.planned_date >= start)
     if end is not None:
         statement = statement.where(StudyTask.planned_date <= end)
+    if course_id is not None:
+        statement = statement.where(StudyTask.course_id == course_id)
     rows = db.scalars(statement.order_by(StudyTask.planned_date, StudyTask.id)).all()
-    return [{
-        "id": row.id,
-        "title": row.title,
-        "course_id": row.course_id,
-        "planned_date": row.planned_date.isoformat(),
-        "duration_minutes": row.duration_minutes,
-        "scheduled_time": row.scheduled_time,
-        "priority": row.priority,
-        "completed": row.completed,
-    } for row in rows]
+    return [_serialize_task(row, _task_context(db, context, rows)) for row in rows]
 
 
 @router.post("/tasks", status_code=status.HTTP_201_CREATED)
@@ -533,6 +1159,17 @@ def create_task(payload: TaskRequest, context: CurrentContext, db: DbSession) ->
         select(Course.id).where(Course.id == payload.course_id, Course.tenant_id == context.tenant_id)
     ) is None:
         raise HTTPException(status_code=404, detail="course not found")
+    point = None
+    if payload.knowledge_point_id is not None:
+        point = db.scalar(select(KnowledgePoint).where(
+            KnowledgePoint.id == payload.knowledge_point_id,
+            KnowledgePoint.tenant_id == context.tenant_id,
+        ))
+        if point is None:
+            raise HTTPException(status_code=404, detail="knowledge point not found")
+        if payload.course_id is not None and point.course_id != payload.course_id:
+            raise HTTPException(status_code=422, detail="knowledge point must belong to the selected course")
+    course_id = payload.course_id or (point.course_id if point else None)
     task = StudyTask(
         tenant_id=context.tenant_id,
         title=payload.title.strip(),
@@ -541,7 +1178,9 @@ def create_task(payload: TaskRequest, context: CurrentContext, db: DbSession) ->
         priority=payload.priority,
         scheduled_time=payload.scheduled_time,
         note=payload.note,
-        course_id=payload.course_id,
+        course_id=course_id,
+        knowledge_point_id=payload.knowledge_point_id,
+        status="planned",
     )
     db.add(task)
     db.flush()
@@ -551,6 +1190,37 @@ def create_task(payload: TaskRequest, context: CurrentContext, db: DbSession) ->
     return {"id": task.id, "title": task.title, "tenant_id": context.tenant_id}
 
 
+@router.delete("/tasks")
+def delete_tasks_bulk(payload: TaskBulkDeleteRequest, context: CurrentContext, db: DbSession) -> dict[str, object]:
+    """Delete only the tasks explicitly selected in this workspace."""
+    task_ids = list(dict.fromkeys(payload.task_ids))
+    rows = db.scalars(select(StudyTask).where(
+        StudyTask.id.in_(task_ids), StudyTask.tenant_id == context.tenant_id,
+    )).all()
+    for task in rows:
+        db.delete(task)
+    record_audit(db, context, "task.bulk_delete", "study_task", ",".join(str(task.id) for task in rows), {"requested_count": len(task_ids), "deleted_count": len(rows)})
+    db.commit()
+    return {"deleted_count": len(rows)}
+
+
+@router.patch("/tasks/{task_id}")
+def update_task(task_id: int, payload: TaskUpdateRequest, context: CurrentContext, db: DbSession) -> dict[str, object]:
+    task = db.scalar(select(StudyTask).where(StudyTask.id == task_id, StudyTask.tenant_id == context.tenant_id))
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    changes = payload.model_dump(exclude_unset=True)
+    if "title" in changes:
+        task.title = str(changes["title"]).strip()
+    for field in ("planned_date", "duration_minutes", "scheduled_time", "priority", "note"):
+        if field in changes:
+            setattr(task, field, changes[field])
+    record_audit(db, context, "task.update", "study_task", str(task.id), changes)
+    db.commit()
+    db.refresh(task)
+    return {"id": task.id, "status": task.status, "planned_date": task.planned_date.isoformat(), "updated": list(changes)}
+
+
 @router.post("/tasks/{task_id}/complete")
 def complete_task(task_id: int, context: CurrentContext, db: DbSession) -> dict[str, object]:
     task = db.scalar(select(StudyTask).where(StudyTask.id == task_id, StudyTask.tenant_id == context.tenant_id))
@@ -558,10 +1228,48 @@ def complete_task(task_id: int, context: CurrentContext, db: DbSession) -> dict[
         raise HTTPException(status_code=404, detail="task not found")
     if not task.completed:
         task.completed = True
+        task.status = "completed"
         task.completed_at = datetime.now()
         record_audit(db, context, "task.complete", "study_task", str(task.id))
+        record_learning_event(db, context, "task_completed", course_id=task.course_id, task_id=task.id,
+                              payload={"duration_minutes": task.duration_minutes})
         db.commit()
     return {"id": task.id, "completed": task.completed}
+
+
+@router.post("/tasks/{task_id}/action")
+def act_on_task(task_id: int, payload: TaskActionRequest, context: CurrentContext, db: DbSession) -> dict[str, object]:
+    task = db.scalar(select(StudyTask).where(StudyTask.id == task_id, StudyTask.tenant_id == context.tenant_id))
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    if payload.action == "start":
+        if task.completed:
+            raise HTTPException(status_code=422, detail="completed task cannot be started")
+        task.status = "in_progress"
+        task.started_at = task.started_at or datetime.now()
+        event_type = "task_started"
+    elif payload.action == "complete":
+        task.completed = True
+        task.status = "completed"
+        task.completed_at = datetime.now()
+        event_type = "task_completed"
+    elif payload.action == "skip":
+        task.completed = True
+        task.status = "skipped"
+        task.completed_at = datetime.now()
+        event_type = "task_skipped"
+    else:
+        task.planned_date = max(task.planned_date, date.today()) + timedelta(days=1)
+        task.completed = False
+        task.status = "planned"
+        event_type = "task_postponed"
+    record_audit(db, context, f"task.{payload.action}", "study_task", str(task.id),
+                 {"planned_date": task.planned_date.isoformat()})
+    record_learning_event(db, context, event_type, course_id=task.course_id, task_id=task.id,
+                          payload={"planned_date": task.planned_date.isoformat()})
+    db.commit()
+    return {"id": task.id, "action": payload.action, "planned_date": task.planned_date.isoformat(),
+            "completed": task.completed, "status": task.status}
 
 
 @router.get("/questions")
@@ -578,17 +1286,101 @@ def list_questions(context: CurrentContext, db: DbSession, course_id: int | None
         "explanation": row.explanation,
         "options": row.options,
         "course_id": row.course_id,
+        "knowledge_point_id": row.knowledge_point_id,
         "difficulty": row.difficulty,
         "tags": row.tags,
     } for row in rows]
 
 
+@router.post("/practice/recommendations")
+def recommend_practice(
+    payload: PracticeRecommendationRequest, context: CurrentContext, db: DbSession
+) -> dict[str, object]:
+    """Select practice from mastery, due reviews, recent errors and difficulty."""
+    if payload.course_id is not None and db.scalar(select(Course.id).where(
+        Course.id == payload.course_id, Course.tenant_id == context.tenant_id
+    )) is None:
+        raise HTTPException(status_code=404, detail="course not found")
+    point_statement = select(KnowledgePoint).where(KnowledgePoint.tenant_id == context.tenant_id)
+    question_statement = select(Question).where(
+        Question.tenant_id == context.tenant_id, Question.archived.is_(False)
+    )
+    if payload.course_id is not None:
+        point_statement = point_statement.where(KnowledgePoint.course_id == payload.course_id)
+        question_statement = question_statement.where(Question.course_id == payload.course_id)
+    points = {point.id: point for point in db.scalars(point_statement).all()}
+    questions = db.scalars(question_statement).all()
+    due_items = db.scalars(select(ReviewItem).where(
+        ReviewItem.tenant_id == context.tenant_id,
+        ReviewItem.status.not_in(("archived", "mastered")),
+        ReviewItem.next_review <= date.today(),
+        ReviewItem.question_id.is_not(None),
+    )).all()
+    due_ids = {item.question_id for item in due_items}
+    recent_wrong = db.scalars(select(QuestionAttempt).where(
+        QuestionAttempt.tenant_id == context.tenant_id,
+        QuestionAttempt.correct.is_(False),
+        QuestionAttempt.attempted_at >= datetime.now() - timedelta(days=30),
+    )).all()
+    wrong_ids = {item.question_id for item in recent_wrong}
+    ranked: list[tuple[float, Question, str]] = []
+    for question in questions:
+        point = points.get(question.knowledge_point_id)
+        mastery = point.mastery if point else 50
+        target_difficulty = 1 if mastery < 40 else (2 if mastery < 70 else 4)
+        score = float((100 - mastery) * 2 + max(0, 5 - abs(question.difficulty - target_difficulty)) * 5)
+        reasons: list[str] = []
+        if question.id in due_ids:
+            score += 1000
+            reasons.append("到期复习")
+        if question.id in wrong_ids:
+            score += 300
+            reasons.append("最近答错")
+        if point and point.mastery < 70:
+            reasons.append(f"薄弱知识点 {point.name}")
+        if not reasons:
+            reasons.append("匹配当前难度")
+        ranked.append((score, question, "；".join(reasons)))
+    ranked.sort(key=lambda item: (-item[0], item[1].id))
+    selected = ranked[:payload.limit]
+    return {
+        "strategy": "due_review → recent_errors → weak_points → adaptive_difficulty",
+        "items": [{
+            "id": question.id,
+            "prompt": question.prompt,
+            "kind": question.kind,
+            "course_id": question.course_id,
+            "knowledge_point_id": question.knowledge_point_id,
+            "difficulty": question.difficulty,
+            "mastery": points[question.knowledge_point_id].mastery if question.knowledge_point_id in points else None,
+            "reason": reason,
+            "due": question.id in due_ids,
+        } for _, question, reason in selected],
+        "empty_reason": "暂无可推荐题目，请先创建题目或从课程资料生成题目。" if not selected else None,
+    }
+
+
 @router.post("/questions", status_code=status.HTTP_201_CREATED)
 def create_question(payload: QuestionRequest, context: CurrentContext, db: DbSession) -> dict[str, object]:
+    if payload.kind not in SUPPORTED_QUESTION_KINDS:
+        raise HTTPException(status_code=422, detail="unsupported question kind")
     if payload.course_id is not None and db.scalar(
         select(Course.id).where(Course.id == payload.course_id, Course.tenant_id == context.tenant_id)
     ) is None:
         raise HTTPException(status_code=404, detail="course not found")
+    if payload.knowledge_point_id is not None:
+        point = db.scalar(
+            select(KnowledgePoint).where(
+                KnowledgePoint.id == payload.knowledge_point_id,
+                KnowledgePoint.tenant_id == context.tenant_id,
+            )
+        )
+        if point is None:
+            raise HTTPException(status_code=404, detail="knowledge point not found")
+        if payload.course_id is not None and point.course_id != payload.course_id:
+            raise HTTPException(status_code=422, detail="knowledge point must belong to the requested course")
+        if payload.course_id is None:
+            payload.course_id = point.course_id
     question = Question(
         tenant_id=context.tenant_id,
         prompt=payload.prompt.strip(),
@@ -599,20 +1391,25 @@ def create_question(payload: QuestionRequest, context: CurrentContext, db: DbSes
         tags=payload.tags,
         difficulty=payload.difficulty,
         course_id=payload.course_id,
+        knowledge_point_id=payload.knowledge_point_id,
     )
     db.add(question)
     db.flush()
     record_audit(db, context, "question.create", "question", str(question.id))
     db.commit()
     db.refresh(question)
-    return {"id": question.id, "course_id": question.course_id, "tenant_id": context.tenant_id}
+    return {"id": question.id, "course_id": question.course_id,
+            "knowledge_point_id": question.knowledge_point_id, "tenant_id": context.tenant_id}
 
 
 @router.get("/goals")
-def list_goals(context: CurrentContext, db: DbSession) -> list[dict[str, object]]:
+def list_goals(context: CurrentContext, db: DbSession, course_id: int | None = None) -> list[dict[str, object]]:
+    filters = [StudyGoal.tenant_id == context.tenant_id]
+    if course_id is not None:
+        filters.append(StudyGoal.course_id == course_id)
     rows = db.scalars(
         select(StudyGoal)
-        .where(StudyGoal.tenant_id == context.tenant_id)
+        .where(*filters)
         .order_by(StudyGoal.target_date, StudyGoal.id)
     ).all()
     return [{
@@ -657,6 +1454,13 @@ def list_knowledge_points(
     if course_id is not None:
         statement = statement.where(KnowledgePoint.course_id == course_id)
     rows = db.scalars(statement.order_by(KnowledgePoint.course_id, KnowledgePoint.id)).all()
+    def json_values(value: str) -> list[object]:
+        try:
+            decoded = json.loads(value or "[]")
+        except (TypeError, json.JSONDecodeError):
+            return []
+        return decoded if isinstance(decoded, list) else []
+
     return [{
         "id": row.id,
         "course_id": row.course_id,
@@ -665,6 +1469,17 @@ def list_knowledge_points(
         "category": row.category,
         "difficulty": row.difficulty,
         "importance": row.importance,
+        "confidence": row.confidence,
+        "practice_count": row.practice_count,
+        "correct_count": row.correct_count,
+        "wrong_count": row.wrong_count,
+        "last_studied_at": row.last_studied_at.isoformat() if row.last_studied_at else None,
+        "next_review_at": row.next_review_at.isoformat() if row.next_review_at else None,
+        "definition": row.definition,
+        "formula": row.formula,
+        "note": row.note,
+        "prerequisites": json_values(row.prerequisites_json),
+        "related_points": json_values(row.related_points_json),
     } for row in rows]
 
 
@@ -692,6 +1507,196 @@ def create_knowledge_point(
     db.commit()
     db.refresh(point)
     return {"id": point.id, "course_id": point.course_id, "tenant_id": context.tenant_id}
+
+
+@router.get("/knowledge-drafts")
+def list_knowledge_drafts(
+    context: CurrentContext, db: DbSession, course_id: int | None = None, status_filter: str = "pending"
+) -> list[dict[str, object]]:
+    statement = select(KnowledgePointDraft).where(KnowledgePointDraft.tenant_id == context.tenant_id)
+    if course_id is not None:
+        if db.scalar(select(Course.id).where(Course.id == course_id, Course.tenant_id == context.tenant_id)) is None:
+            raise HTTPException(status_code=404, detail="course not found")
+        statement = statement.where(KnowledgePointDraft.course_id == course_id)
+    if status_filter:
+        if status_filter not in {"pending", "accepted", "rejected"}:
+            raise HTTPException(status_code=422, detail="invalid draft status")
+        statement = statement.where(KnowledgePointDraft.status == status_filter)
+    drafts = db.scalars(statement.order_by(KnowledgePointDraft.id.desc()).limit(100)).all()
+    draft_ids = [item.id for item in drafts]
+    citations_by_draft: dict[int, list[dict[str, object]]] = {item.id: [] for item in drafts}
+    if draft_ids:
+        rows = db.execute(
+            select(KnowledgePointDraftCitation, DocumentChunk, ResourceFile)
+            .join(DocumentChunk, DocumentChunk.id == KnowledgePointDraftCitation.chunk_id)
+            .join(ResourceFile, ResourceFile.id == DocumentChunk.resource_id, isouter=True)
+            .where(KnowledgePointDraftCitation.draft_id.in_(draft_ids), DocumentChunk.tenant_id == context.tenant_id)
+        ).all()
+        for link, chunk, resource in rows:
+            citations_by_draft[link.draft_id].append({
+                "chunk_id": chunk.id,
+                "source_name": resource.name if resource else "未知资料",
+                "location_label": chunk.location_label,
+                "quote_text": link.quote_text,
+            })
+    return [{
+        "id": item.id,
+        "ai_run_id": item.ai_run_id,
+        "course_id": item.course_id,
+        "name": item.name,
+        "category": item.category,
+        "definition": item.definition,
+        "formula": item.formula,
+        "difficulty": item.difficulty,
+        "importance": item.importance,
+        "confidence": item.confidence,
+        "status": item.status,
+        "review_note": item.review_note,
+        "accepted_knowledge_point_id": item.accepted_knowledge_point_id,
+        "citations": citations_by_draft[item.id],
+    } for item in drafts]
+
+
+@router.post("/knowledge-drafts/{draft_id}/review")
+def review_knowledge_draft(
+    draft_id: int, payload: KnowledgeDraftReviewRequest, context: CurrentContext, db: DbSession
+) -> dict[str, object]:
+    draft = db.scalar(select(KnowledgePointDraft).where(
+        KnowledgePointDraft.id == draft_id, KnowledgePointDraft.tenant_id == context.tenant_id
+    ))
+    if draft is None:
+        raise HTTPException(status_code=404, detail="knowledge draft not found")
+    if draft.status != "pending":
+        raise HTTPException(status_code=409, detail="knowledge draft has already been reviewed")
+    draft.review_note = payload.review_note.strip()
+    draft.reviewed_at = datetime.now()
+    accepted_id: int | None = None
+    if payload.action == "accept":
+        point = db.scalar(select(KnowledgePoint).where(
+            KnowledgePoint.tenant_id == context.tenant_id,
+            KnowledgePoint.course_id == draft.course_id,
+            KnowledgePoint.name == draft.name,
+        ))
+        if point is None:
+            point = KnowledgePoint(
+                tenant_id=context.tenant_id, course_id=draft.course_id, name=draft.name, source="ai"
+            )
+            db.add(point)
+        point.category = draft.category
+        point.definition = draft.definition
+        point.formula = draft.formula
+        point.prerequisites_json = draft.prerequisites_json
+        point.related_points_json = draft.related_points_json
+        point.common_mistakes_json = draft.common_mistakes_json
+        point.difficulty = draft.difficulty
+        point.importance = draft.importance
+        point.confidence = draft.confidence
+        point.note = payload.review_note.strip()
+        point.source = "ai"
+        db.flush()
+        accepted_id = point.id
+        draft.status = "accepted"
+        draft.accepted_knowledge_point_id = accepted_id
+        record_learning_event(db, context, "knowledge_extracted", course_id=draft.course_id,
+                              knowledge_point_id=accepted_id, payload={"draft_id": draft.id})
+    else:
+        draft.status = "rejected"
+    record_audit(db, context, f"knowledge_draft.{payload.action}", "knowledge_point_draft", str(draft.id),
+                 {"knowledge_point_id": accepted_id})
+    db.commit()
+    return {"id": draft.id, "status": draft.status, "knowledge_point_id": accepted_id}
+
+
+@router.get("/question-drafts")
+def list_question_drafts(
+    context: CurrentContext, db: DbSession, course_id: int | None = None, status_filter: str = "pending"
+) -> list[dict[str, object]]:
+    statement = select(QuestionDraft).where(QuestionDraft.tenant_id == context.tenant_id)
+    if course_id is not None:
+        if db.scalar(select(Course.id).where(Course.id == course_id, Course.tenant_id == context.tenant_id)) is None:
+            raise HTTPException(status_code=404, detail="course not found")
+        statement = statement.where(QuestionDraft.course_id == course_id)
+    if status_filter:
+        if status_filter not in {"pending", "accepted", "rejected"}:
+            raise HTTPException(status_code=422, detail="invalid draft status")
+        statement = statement.where(QuestionDraft.status == status_filter)
+    drafts = db.scalars(statement.order_by(QuestionDraft.id.desc()).limit(100)).all()
+    draft_ids = [item.id for item in drafts]
+    citations_by_draft: dict[int, list[dict[str, object]]] = {item.id: [] for item in drafts}
+    if draft_ids:
+        rows = db.execute(
+            select(QuestionDraftCitation, DocumentChunk, ResourceFile)
+            .join(DocumentChunk, DocumentChunk.id == QuestionDraftCitation.chunk_id)
+            .join(ResourceFile, ResourceFile.id == DocumentChunk.resource_id, isouter=True)
+            .where(QuestionDraftCitation.question_draft_id.in_(draft_ids), DocumentChunk.tenant_id == context.tenant_id)
+        ).all()
+        for link, chunk, resource in rows:
+            citations_by_draft[link.question_draft_id].append({
+                "chunk_id": chunk.id,
+                "citation_number": link.citation_number,
+                "source_name": resource.name if resource else "未知资料",
+                "location_label": chunk.location_label,
+                "quote_text": link.quote_text,
+            })
+    def decoded(value: str, fallback: object) -> object:
+        try:
+            result = json.loads(value or "")
+            return result
+        except (TypeError, json.JSONDecodeError):
+            return fallback
+    return [{
+        "id": item.id, "ai_run_id": item.ai_run_id, "course_id": item.course_id,
+        "knowledge_point_id": item.knowledge_point_id, "kind": item.kind,
+        "prompt": item.prompt, "answer": item.answer, "explanation": item.explanation,
+        "options": decoded(item.options_json, []), "tags": decoded(item.tags_json, []),
+        "difficulty": item.difficulty, "status": item.status, "review_note": item.review_note,
+        "accepted_question_id": item.accepted_question_id,
+        "citations": citations_by_draft[item.id],
+    } for item in drafts]
+
+
+@router.post("/question-drafts/{draft_id}/review")
+def review_question_draft(
+    draft_id: int, payload: QuestionDraftReviewRequest, context: CurrentContext, db: DbSession
+) -> dict[str, object]:
+    draft = db.scalar(select(QuestionDraft).where(
+        QuestionDraft.id == draft_id, QuestionDraft.tenant_id == context.tenant_id
+    ))
+    if draft is None:
+        raise HTTPException(status_code=404, detail="question draft not found")
+    if draft.status != "pending":
+        raise HTTPException(status_code=409, detail="question draft has already been reviewed")
+    draft.review_note = payload.review_note.strip()
+    draft.reviewed_at = datetime.now()
+    question_id: int | None = None
+    if payload.action == "accept":
+        try:
+            options = json.loads(draft.options_json or "[]")
+            tags = json.loads(draft.tags_json or "[]")
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail="question draft has invalid structured fields") from exc
+        if not isinstance(options, list) or not isinstance(tags, list):
+            raise HTTPException(status_code=422, detail="question draft has invalid structured fields")
+        question = Question(
+            tenant_id=context.tenant_id, course_id=draft.course_id,
+            knowledge_point_id=draft.knowledge_point_id, kind=draft.kind,
+            prompt=draft.prompt, answer=draft.answer, explanation=draft.explanation,
+            options="\n".join(str(value) for value in options),
+            tags=", ".join(str(value) for value in tags), difficulty=draft.difficulty, source="ai",
+        )
+        db.add(question)
+        db.flush()
+        question_id = question.id
+        draft.accepted_question_id = question_id
+        draft.status = "accepted"
+        record_learning_event(db, context, "question_draft_accepted", course_id=draft.course_id,
+                              question_id=question_id, payload={"draft_id": draft.id})
+    else:
+        draft.status = "rejected"
+    record_audit(db, context, f"question_draft.{payload.action}", "question_draft", str(draft.id),
+                 {"question_id": question_id})
+    db.commit()
+    return {"id": draft.id, "status": draft.status, "question_id": question_id}
 
 
 @router.post("/practice-sessions", status_code=status.HTTP_201_CREATED)
@@ -762,8 +1767,8 @@ def submit_practice_attempt(
             QuestionAttempt.tenant_id == context.tenant_id,
         )
     )
-    correct = payload.response.strip() == question.answer.strip()
-    error_type = "" if correct else ("choice_mismatch" if question.kind in {"single_choice", "multiple_choice", "true_false"} else "answer_mismatch")
+    correct = _normalized_answer(payload.response, question.kind) == _normalized_answer(question.answer, question.kind)
+    error_type = "" if correct else ("choice_mismatch" if question.kind in CHOICE_QUESTION_KINDS else "answer_mismatch")
     if previous is None:
         attempt = QuestionAttempt(
             tenant_id=context.tenant_id,
@@ -779,6 +1784,8 @@ def submit_practice_attempt(
         previous.correct = correct
         previous.elapsed_seconds = payload.elapsed_seconds
         attempt = previous
+    record_learning_event(db, context, "question_answered", course_id=session.course_id,
+                          question_id=question.id, payload={"correct": correct, "elapsed_seconds": payload.elapsed_seconds})
     db.commit()
     record_audit(db, context, "practice_attempt.submit", "question", str(question_id), {"correct": correct})
     db.commit()
@@ -809,7 +1816,19 @@ def complete_practice_session(session_id: int, context: CurrentContext, db: DbSe
         if question_for_mastery and question_for_mastery.knowledge_point_id:
             point = db.scalar(select(KnowledgePoint).where(KnowledgePoint.id == question_for_mastery.knowledge_point_id, KnowledgePoint.tenant_id == context.tenant_id))
             if point is not None:
-                point.mastery = max(0, min(100, int(point.mastery) + (10 if attempt.correct else -8)))
+                point.practice_count += 1
+                if attempt.correct:
+                    point.correct_count += 1
+                else:
+                    point.wrong_count += 1
+                point.last_studied_at = datetime.now()
+                point.next_review_at = datetime.now() + timedelta(days=3 if attempt.correct else 1)
+                # Explainable update: move 20% toward the observed result,
+                # with a small difficulty adjustment for harder questions.
+                target = 100 if attempt.correct else 0
+                learning_rate = 0.24 if question_for_mastery.difficulty >= 4 else 0.20
+                point.mastery = max(0, min(100, round(point.mastery * (1 - learning_rate) + target * learning_rate)))
+                point.confidence = round(point.correct_count / point.practice_count, 4)
                 mastery_updates[point.id] = point.mastery
         if attempt.correct is not False:
             continue
@@ -817,15 +1836,21 @@ def complete_practice_session(session_id: int, context: CurrentContext, db: DbSe
         if question is None:
             continue
         wrong_questions.append({"question_id": question.id, "prompt": question.prompt,
-                                "kind": question.kind, "error_type": ("choice_mismatch" if question.kind in {"single_choice", "multiple_choice", "true_false"} else "answer_mismatch"),
+                                "kind": question.kind, "error_type": ("choice_mismatch" if question.kind in CHOICE_QUESTION_KINDS else "answer_mismatch"),
                                 "tags": question.tags})
         review = db.scalar(select(ReviewItem).where(ReviewItem.tenant_id == context.tenant_id, ReviewItem.question_id == question.id))
         if review is None:
             db.add(ReviewItem(tenant_id=context.tenant_id, question_id=question.id, title=question.prompt[:180],
-                              status="reviewing", wrong_count=1, error_reason=("choice_mismatch" if question.kind in {"single_choice", "multiple_choice", "true_false"} else "answer_mismatch"), next_review=date.today() + timedelta(days=1)))
+                              status="reviewing", wrong_count=1,
+                              error_reason=("choice_mismatch" if question.kind in CHOICE_QUESTION_KINDS else "answer_mismatch"),
+                              ai_analysis=question.explanation or "本题答案与标准答案不一致，建议先复习关联知识点后再练习。",
+                              next_review=date.today() + timedelta(days=1)))
         else:
-            review.status = "reviewing"; review.wrong_count += 1; review.error_reason=("choice_mismatch" if question.kind in {"single_choice", "multiple_choice", "true_false"} else "answer_mismatch"); review.next_review = date.today() + timedelta(days=1)
+            review.status = "reviewing"; review.wrong_count += 1; review.error_reason=("choice_mismatch" if question.kind in CHOICE_QUESTION_KINDS else "answer_mismatch"); review.ai_analysis = review.ai_analysis or question.explanation or "本题答案与标准答案不一致，建议先复习关联知识点后再练习。"; review.next_review = date.today() + timedelta(days=1)
     record_audit(db, context, "practice_session.complete", "practice_session", str(session.id), {"correct": session.correct})
+    record_learning_event(db, context, "study_completed", course_id=session.course_id,
+                          payload={"practice_session_id": session.id, "total": session.total,
+                                   "correct": session.correct, "duration_seconds": session.duration_seconds})
     analysis_job = BackgroundJob(
         tenant_id=context.tenant_id, requested_by=context.user_id, job_type="ai_feature", status="queued",
         payload=json.dumps({"tenant_id": context.tenant_id, "feature": "learning_report", "data": {
@@ -842,10 +1867,14 @@ def complete_practice_session(session_id: int, context: CurrentContext, db: DbSe
 
 
 @router.get("/reviews")
-def list_reviews(context: CurrentContext, db: DbSession, due_only: bool = False) -> list[dict[str, object]]:
+def list_reviews(context: CurrentContext, db: DbSession, due_only: bool = False, course_id: int | None = None) -> list[dict[str, object]]:
     statement = select(ReviewItem).where(ReviewItem.tenant_id == context.tenant_id, ReviewItem.status != "archived")
     if due_only:
         statement = statement.where(ReviewItem.next_review <= date.today(), ReviewItem.status != "mastered")
+    if course_id is not None:
+        statement = statement.where(ReviewItem.question_id.in_(select(Question.id).where(
+            Question.course_id == course_id, Question.tenant_id == context.tenant_id,
+        )))
     rows = db.scalars(statement.order_by(ReviewItem.next_review, ReviewItem.id)).all()
     return [{
         "id": row.id,
@@ -857,6 +1886,9 @@ def list_reviews(context: CurrentContext, db: DbSession, due_only: bool = False)
         "next_review": row.next_review.isoformat(),
         "note": row.note,
         "error_reason": row.error_reason,
+        "ai_analysis": row.ai_analysis,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "last_reviewed_at": row.last_reviewed_at.isoformat() if row.last_reviewed_at else None,
     } for row in rows]
 
 
@@ -907,6 +1939,7 @@ def submit_review(item_id: int, payload: ReviewRequest, context: CurrentContext,
         intervals = (1, 3, 7, 14, 30)
         item.next_review = date.today() + timedelta(days=intervals[min(item.streak - 1, len(intervals) - 1)])
         item.status = "mastered" if item.streak >= 5 else "reviewing"
+    item.last_reviewed_at = datetime.now()
     attempt = ReviewAttempt(
         tenant_id=context.tenant_id,
         review_item_id=item.id,
@@ -916,6 +1949,11 @@ def submit_review(item_id: int, payload: ReviewRequest, context: CurrentContext,
     )
     db.add(attempt)
     record_audit(db, context, "review.submit", "review_item", str(item.id), {"result": payload.result})
+    review_question = db.scalar(select(Question).where(Question.id == item.question_id, Question.tenant_id == context.tenant_id)) if item.question_id else None
+    record_learning_event(db, context, "knowledge_reviewed" if item.question_id else "vocabulary_reviewed",
+                          course_id=review_question.course_id if review_question else None,
+                          question_id=item.question_id,
+                          payload={"result": payload.result, "next_review": item.next_review.isoformat()})
     db.commit()
     db.refresh(attempt)
     return {
@@ -1019,10 +2057,13 @@ def finish_study_session(
 
 
 @router.get("/resources")
-def list_resources(context: CurrentContext, db: DbSession) -> list[dict[str, object]]:
+def list_resources(context: CurrentContext, db: DbSession, course_id: int | None = None) -> list[dict[str, object]]:
+    filters = [ResourceFile.tenant_id == context.tenant_id, ResourceFile.trashed.is_(False)]
+    if course_id is not None:
+        filters.append(ResourceFile.course_id == course_id)
     rows = db.scalars(
         select(ResourceFile)
-        .where(ResourceFile.tenant_id == context.tenant_id, ResourceFile.trashed.is_(False))
+        .where(*filters)
         .order_by(ResourceFile.id.desc())
     ).all()
     return [{"id": row.id, "name": row.name, "course_id": row.course_id, "size": row.size} for row in rows]
@@ -1070,7 +2111,14 @@ def import_agent_resource_url(
             detail="queued by Agent-approved web resource import",
         )
         db.add_all([resource, job]); db.flush()
-        job.payload = json.dumps({"resource_id": resource.id, "tenant_id": context.tenant_id}, ensure_ascii=False)
+        pending = db.scalar(select(AgentHandoff).where(
+            AgentHandoff.session_id == session_id, AgentHandoff.kind == "learning_pending",
+        ).order_by(AgentHandoff.id.desc()))
+        pending_payload = json.loads(pending.payload_json or "{}") if pending is not None else {}
+        follow_up = None
+        if pending_payload.get("status") == "completed" and int(pending_payload.get("course_id") or 0) == payload.course_id:
+            follow_up = {"request": str(pending_payload.get("request") or "根据课程资料生成练习题"), "goal_id": pending_payload.get("goal_id"), "session_id": session_id}
+        job.payload = json.dumps({"resource_id": resource.id, "tenant_id": context.tenant_id, "question_follow_up": follow_up}, ensure_ascii=False)
         db.commit()
         return {"resource_id": resource.id, "job_id": job.id, "status": "queued", "filename": filename}
     except HTTPException:
@@ -1085,7 +2133,7 @@ def upload_resource(
     context: CurrentContext,
     db: DbSession,
     file: UploadFile = File(...),
-    course_id: int | None = None,
+    course_id: int | None = Form(default=None),
 ) -> dict[str, object]:
     if course_id is not None and db.scalar(
         select(Course.id).where(Course.id == course_id, Course.tenant_id == context.tenant_id)
@@ -1173,18 +2221,34 @@ def queue_rag_job(payload: RagRequest, context: CurrentContext, db: DbSession) -
 
 @router.post("/ai/question-generation/jobs", status_code=status.HTTP_202_ACCEPTED)
 def queue_question_generation_job(payload: AiQuestionGenerationRequest, context: CurrentContext, db: DbSession) -> dict[str, str]:
-    allowed_kinds = {"single_choice", "multiple_choice", "true_false", "short_answer"}
-    if not set(payload.kinds) <= allowed_kinds:
+    if not set(payload.kinds) <= SUPPORTED_QUESTION_KINDS:
         raise HTTPException(status_code=422, detail="unsupported question kind")
     course = db.scalar(select(Course.id).where(Course.id == payload.course_id, Course.tenant_id == context.tenant_id))
     if course is None:
         raise HTTPException(status_code=404, detail="course not found")
+    if payload.knowledge_point_id is not None and db.scalar(select(KnowledgePoint.id).where(
+        KnowledgePoint.id == payload.knowledge_point_id,
+        KnowledgePoint.course_id == payload.course_id,
+        KnowledgePoint.tenant_id == context.tenant_id,
+    )) is None:
+        raise HTTPException(status_code=404, detail="knowledge point not found in course")
+    if payload.resource_ids:
+        resource_count = db.scalar(select(func.count()).select_from(ResourceFile).where(
+            ResourceFile.id.in_(payload.resource_ids), ResourceFile.tenant_id == context.tenant_id,
+            ResourceFile.course_id == payload.course_id, ResourceFile.trashed.is_(False),
+        )) or 0
+        if resource_count != len(set(payload.resource_ids)):
+            raise HTTPException(status_code=404, detail="one or more resources not found in course")
     job = BackgroundJob(
         tenant_id=context.tenant_id,
         requested_by=context.user_id,
         job_type="generate_questions",
         status="queued",
-        payload=json.dumps({"tenant_id": context.tenant_id, "course_id": payload.course_id, "request": payload.request, "count": payload.count, "difficulty": payload.difficulty, "kinds": payload.kinds}, ensure_ascii=False),
+        payload=json.dumps({"tenant_id": context.tenant_id, "course_id": payload.course_id,
+                            "knowledge_point_id": payload.knowledge_point_id,
+                            "resource_ids": list(dict.fromkeys(payload.resource_ids)),
+                            "request": payload.request, "count": payload.count,
+                            "difficulty": payload.difficulty, "kinds": payload.kinds}, ensure_ascii=False),
         detail="waiting for grounded AI question generation",
     )
     db.add(job)
@@ -1203,16 +2267,29 @@ def queue_ai_feature_job(payload: AiFeatureRequest, context: CurrentContext, db:
         raise HTTPException(status_code=422, detail="attempt_id is required for this AI feature")
     if payload.feature == "learning_plan" and payload.goal_id is None:
         raise HTTPException(status_code=422, detail="goal_id is required for learning plan")
+    if payload.resource_ids and payload.feature != "knowledge_extraction":
+        raise HTTPException(status_code=422, detail="resource_ids is only supported for knowledge extraction")
+    if payload.resource_ids and payload.course_id is None:
+        raise HTTPException(status_code=422, detail="course_id is required when resource_ids are provided")
     course_id = payload.course_id
     course_created = False
     if course_id is not None and db.scalar(select(Course.id).where(Course.id == course_id, Course.tenant_id == context.tenant_id)) is None:
         raise HTTPException(status_code=404, detail="course not found")
+    resource_ids = list(dict.fromkeys(payload.resource_ids))
+    if resource_ids:
+        resource_count = db.scalar(select(func.count()).select_from(ResourceFile).where(
+            ResourceFile.id.in_(resource_ids), ResourceFile.tenant_id == context.tenant_id,
+            ResourceFile.course_id == course_id, ResourceFile.trashed.is_(False),
+        )) or 0
+        if resource_count != len(resource_ids):
+            raise HTTPException(status_code=404, detail="one or more resources not found in course")
     if False and course_id is None:
         course_name = payload.title.strip()[:120] or payload.request.strip()[:120] or "AI 学习课程"
         course = Course(tenant_id=context.tenant_id, name=course_name, subject="AI 自动创建", description=payload.request[:10000])
         db.add(course); db.flush(); course_id = course.id; course_created = True
     data = payload.model_dump(mode="json")
     data.pop("feature")
+    data["resource_ids"] = resource_ids
     job = BackgroundJob(
         tenant_id=context.tenant_id,
         requested_by=context.user_id,
@@ -1290,33 +2367,50 @@ def launch_learning_loop(session_id: int, payload: LearningLaunchRequest, contex
     pending = db.scalar(select(AgentHandoff).where(
         AgentHandoff.session_id == session_id, AgentHandoff.kind == "learning_pending",
     ).order_by(AgentHandoff.id.desc()))
+    source_items: list[dict[str, object]] = []
     if pending is not None:
         stored = json.loads(pending.payload_json or "{}")
         if stored.get("status") == "completed":
             raise HTTPException(status_code=409, detail="this learning request has already started")
+        source_items = list(stored.get("source_items") or [])
         stored.update({"status": "completed", "started_at": datetime.now().isoformat()})
         pending.payload_json = json.dumps(stored, ensure_ascii=False)
     goal = StudyGoal(tenant_id=context.tenant_id, title=payload.title.strip(), course_id=course_id,
                      target_date=target, weekly_minutes=payload.weekly_minutes)
     db.add(goal); db.flush()
-    plan_job = BackgroundJob(tenant_id=context.tenant_id, requested_by=context.user_id, job_type="ai_feature", status="queued",
-        payload=json.dumps({"tenant_id": context.tenant_id, "feature": "learning_plan", "data": {"goal_id": goal.id, "course_id": course_id, "request": payload.request}}, ensure_ascii=False), detail="queued by unified learning launch")
-    db.add(plan_job)
+    if pending is not None:
+        stored = json.loads(pending.payload_json or "{}")
+        stored["goal_id"] = goal.id
+        pending.payload_json = json.dumps(stored, ensure_ascii=False)
+    # Fixed workflow: the question agent may only run after the research agent
+    # has brought relevant material into the indexed course library.
+    indexed_evidence = db.scalar(select(func.count()).select_from(DocumentChunk).where(
+        DocumentChunk.tenant_id == context.tenant_id, DocumentChunk.course_id == course_id,
+    )) or 0
+    plan_job = None
+    if indexed_evidence:
+        plan_job = BackgroundJob(tenant_id=context.tenant_id, requested_by=context.user_id, job_type="ai_feature", status="queued",
+            payload=json.dumps({"tenant_id": context.tenant_id, "feature": "learning_plan", "data": {"goal_id": goal.id, "course_id": course_id, "request": payload.request}}, ensure_ascii=False), detail="queued by task-scheduling agent from indexed course materials")
+        db.add(plan_job); db.flush()
     question_job_id = None
     vocabulary_job_id = None
-    if course_id is not None:
+    if indexed_evidence:
         question_job = BackgroundJob(tenant_id=context.tenant_id, requested_by=context.user_id, job_type="generate_questions", status="queued",
-            payload=json.dumps({"tenant_id": context.tenant_id, "course_id": course_id, "request": payload.request, "count": payload.question_count, "difficulty": 3, "kinds": ["single_choice", "short_answer"], "auto_practice": True, "allow_ungrounded": True, "goal_id": goal.id, "agent_session_id": session_id}, ensure_ascii=False), detail="queued by unified learning launch")
+            payload=json.dumps({"tenant_id": context.tenant_id, "course_id": course_id, "request": payload.request, "count": payload.question_count, "difficulty": 3, "kinds": ["single_choice", "short_answer"], "auto_practice": True, "goal_id": goal.id, "agent_session_id": session_id}, ensure_ascii=False), detail="queued by question agent from indexed course materials")
         db.add(question_job); db.flush(); question_job_id = question_job.id
-        vocabulary_job = BackgroundJob(tenant_id=context.tenant_id, requested_by=context.user_id, job_type="generate_vocabulary", status="queued",
-            payload=json.dumps({"tenant_id": context.tenant_id, "course_id": course_id, "request": payload.request, "count": payload.vocabulary_count}, ensure_ascii=False), detail="queued by unified learning launch")
-        db.add(vocabulary_job); db.flush(); vocabulary_job_id = vocabulary_job.id
-    record_audit(db, context, "agent.learning_launch", "study_goal", str(goal.id), {"plan_job_id": plan_job.id, "question_job_id": question_job_id})
+        # Vocabulary extraction requires indexed course material. It is not a
+        # prerequisite for a learner asking to create a plan, so do not queue
+        # a guaranteed-failing job for a newly created or empty course.
+    record_audit(db, context, "agent.learning_launch", "study_goal", str(goal.id), {"plan_job_id": plan_job.id if plan_job else None, "question_job_id": question_job_id})
     db.add(AgentHandoff(session_id=session_id, kind="active_course", target_id=course_id,
                         payload_json=json.dumps({"course_id": course_id}, ensure_ascii=False)))
     db.commit()
-    return {"course_id": course_id, "course_created": course_created, "goal_id": goal.id, "plan_job_id": plan_job.id, "question_job_id": question_job_id, "vocabulary_job_id": vocabulary_job_id,
-            "target_date": target.isoformat(), "status": "queued"}
+    return {"course_id": course_id, "course_created": course_created, "goal_id": goal.id, "plan_job_id": plan_job.id if plan_job else None, "question_job_id": question_job_id, "vocabulary_job_id": vocabulary_job_id, "source_items": source_items,
+            "target_date": target.isoformat(), "status": "queued", "workflow_steps": [
+                {"agent": "资料检索 Agent", "status": "ready", "detail": "检索并筛选高相关学习资料；导入需你确认"},
+                {"agent": "任务编排 Agent", "status": "queued" if plan_job else "waiting_for_material", "detail": "仅在资料索引后生成学习者的每日任务"},
+                {"agent": "出题 Agent", "status": "queued" if question_job_id else "waiting_for_material", "detail": "依据已索引资料出题"},
+            ]}
 
 
 @router.post("/agent/sessions/{session_id}/diagnostic-launch", status_code=status.HTTP_202_ACCEPTED)
@@ -1603,6 +2697,27 @@ def get_agent_messages(session_id: int, context: CurrentContext, db: DbSession) 
     except ValueError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/agent/sessions/{session_id}/learning-launch-state")
+def get_learning_launch_state(session_id: int, context: CurrentContext, db: DbSession) -> dict[str, object]:
+    """Return the durable confirmation state used to restore the learning card."""
+    from app.models import AgentSession
+    session = db.scalar(select(AgentSession).where(
+        AgentSession.id == session_id, AgentSession.tenant_id == context.tenant_id,
+    ))
+    if session is None:
+        raise HTTPException(status_code=404, detail="agent session not found")
+    handoff = db.scalar(select(AgentHandoff).where(
+        AgentHandoff.session_id == session_id, AgentHandoff.kind == "learning_pending",
+    ).order_by(AgentHandoff.id.desc()))
+    if handoff is None:
+        return {"state": None}
+    try:
+        payload = json.loads(handoff.payload_json or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+    return {"state": payload}
+
+
 @router.post("/agent/sessions/{session_id}/messages/stream")
 def stream_agent_message(session_id: int, payload: AgentMessageRequest, context: CurrentContext, db: DbSession):
     if payload.course_id is not None and db.scalar(select(Course.id).where(Course.id == payload.course_id, Course.tenant_id == context.tenant_id)) is None:
@@ -1617,6 +2732,7 @@ def stream_agent_message(session_id: int, payload: AgentMessageRequest, context:
 
 @router.post("/agent/sessions/{session_id}/coding/proposals")
 def create_web_coding_proposal(session_id: int, payload: AgentMessageRequest, context: CurrentContext, db: DbSession) -> dict[str, object]:
+    _ensure_web_coding_enabled()
     try:
         session_messages(db, context.tenant_id, session_id)
     except ValueError as exc:
@@ -1639,6 +2755,7 @@ def create_web_coding_proposal(session_id: int, payload: AgentMessageRequest, co
 
 @router.post("/agent/sessions/{session_id}/coding/proposals/{handoff_id}/run")
 def run_web_coding_proposal(session_id: int, handoff_id: int, payload: WebCodingRunRequest, context: CurrentContext, db: DbSession) -> dict[str, object]:
+    _ensure_web_coding_enabled()
     if not payload.confirmed:
         raise HTTPException(status_code=409, detail="confirm running the temporary sandbox code")
     try:

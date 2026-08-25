@@ -134,7 +134,7 @@ def run_learning_agent(
             if course_id is None:
                 return {"feature": action, "status": "needs_input", "detail": "Select a course before the agent can generate grounded questions."}
             result = generate_grounded_questions(
-                payload={"tenant_id": tenant_id, "course_id": int(course_id), "request": message, "count": 5, "difficulty": 3, "kinds": ["single_choice", "short_answer"]},
+                payload={"tenant_id": tenant_id, "course_id": int(course_id), "request": message, "count": 5, "difficulty": 3, "kinds": ["single_choice", "short_answer"], "allow_ungrounded": True},
                 session_factory=session_factory, embeddings=embeddings,
                 embedding_version=embedding_version, dimensions=dimensions,
                 chat_model=chat_model, chat_provider=provider,

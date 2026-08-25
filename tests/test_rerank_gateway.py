@@ -2,8 +2,12 @@ from ai.config import AISettings
 from ai.gateways.rerank import AliyunReranker, OpenAICompatibleReranker, _scores_from_results, create_reranker
 
 
-def test_rerank_is_disabled_by_default() -> None:
-    assert create_reranker(AISettings()) is None
+def test_rerank_is_disabled_by_default(monkeypatch) -> None:
+    # Do not let a developer's local .env turn a default-value test into an
+    # integration test. Production settings still load .env normally.
+    monkeypatch.delenv("LEARNING_AI_ENABLED", raising=False)
+    monkeypatch.delenv("LEARNING_AI_RERANK_ENABLED", raising=False)
+    assert create_reranker(AISettings(_env_file=None)) is None
 
 
 def test_siliconflow_uses_openai_compatible_rerank_endpoint() -> None:

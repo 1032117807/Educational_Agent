@@ -75,6 +75,7 @@ def test_compose_uses_a_non_owner_runtime_database_role() -> None:
     assert "pg_class" in grant_script
     assert "CREATE ROLE" in grant_script
     assert "APP_DB_PASSWORD" in grant_script
+    assert "TZ: ${TZ:-Asia/Shanghai}" in compose
 
 
 def test_postgres_integration_verifier_checks_rls_and_runtime_role() -> None:
@@ -97,6 +98,8 @@ def test_ci_runs_the_real_saas_stack_and_integration_verifier() -> None:
     assert "APP_ENV: production" in workflow
     assert "logs --no-color" in workflow
     assert "REDIS_PASSWORD" in workflow
+    assert "scripts/smoke_test_saas.py" in workflow
+    assert "scripts/verify_http_security.py" in workflow
 
 
 def test_compose_requires_redis_authentication() -> None:

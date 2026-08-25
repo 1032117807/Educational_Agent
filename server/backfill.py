@@ -47,6 +47,7 @@ TENANT_TABLES = (
     "agent_memories",
     "agent_workflows",
     "task_recurrences",
+    "learning_events",
 )
 
 

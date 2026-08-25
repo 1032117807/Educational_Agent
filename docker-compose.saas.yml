@@ -6,6 +6,7 @@ services:
     env_file: .env
     environment:
       APP_ENV: ${APP_ENV:-development}
+      TZ: ${TZ:-Asia/Shanghai}
       DATABASE_URL: postgresql+psycopg://${APP_DB_USER:-learning_app}:${APP_DB_PASSWORD:-replace-with-a-runtime-password}@postgres:5432/learning
       REDIS_URL: redis://:${REDIS_PASSWORD:-replace-with-a-redis-password}@redis:6379/0
       OBJECT_STORAGE_ENDPOINT: http://minio:9000
@@ -13,11 +14,13 @@ services:
       OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:-learning-admin}
       OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:-replace-with-a-long-minio-password}
       LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY: "false"
+      # PaddleOCR is intentionally excluded from the core SaaS image. Enable
+      # the compatible vision OCR provider for scanned documents instead.
+      LEARNING_AI_OCR_ENABLED: "false"
+      LEARNING_WEB_CODING_ENABLED: "false"
     command: python -m uvicorn server.main:app --host 0.0.0.0 --port 8000
     ports:
-      - "8000:8000"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -35,6 +38,7 @@ services:
     env_file: .env
     environment:
       APP_ENV: ${APP_ENV:-development}
+      TZ: ${TZ:-Asia/Shanghai}
       DATABASE_URL: postgresql+psycopg://${APP_DB_USER:-learning_app}:${APP_DB_PASSWORD:-replace-with-a-runtime-password}@postgres:5432/learning
       REDIS_URL: redis://:${REDIS_PASSWORD:-replace-with-a-redis-password}@redis:6379/0
       OBJECT_STORAGE_ENDPOINT: http://minio:9000
@@ -42,6 +46,7 @@ services:
       OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:-learning-admin}
       OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:-replace-with-a-long-minio-password}
       LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY: "false"
+      LEARNING_AI_OCR_ENABLED: "false"
     command: python -m server.run_worker
     depends_on:
       postgres:
@@ -71,6 +76,7 @@ services:
       dockerfile: docker/saas/Dockerfile
     environment:
       APP_ENV: ${APP_ENV:-development}
+      TZ: ${TZ:-Asia/Shanghai}
       DATABASE_URL: postgresql+psycopg://learning:${POSTGRES_PASSWORD:-change-me-in-production}@postgres:5432/learning
       MIGRATION_DATABASE_URL: postgresql+psycopg://learning:${POSTGRES_PASSWORD:-change-me-in-production}@postgres:5432/learning
       APP_DB_USER: ${APP_DB_USER:-learning_app}
@@ -86,10 +92,11 @@ services:
       POSTGRES_DB: learning
       POSTGRES_USER: learning
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-in-production}
+      TZ: ${TZ:-Asia/Shanghai}
       APP_DB_USER: ${APP_DB_USER:-learning_app}
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:-replace-with-a-runtime-password}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init-runtime-role.sh:/docker-entrypoint-initdb.d/20-runtime-role.sh:ro
@@ -105,7 +112,7 @@ services:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-replace-with-a-redis-password}
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -121,8 +128,8 @@ services:
       MINIO_ROOT_USER: ${OBJECT_STORAGE_ACCESS_KEY:-learning-admin}
       MINIO_ROOT_PASSWORD: ${OBJECT_STORAGE_SECRET_KEY:-replace-with-a-long-minio-password}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -142,7 +149,28 @@ services:
       OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:-learning-admin}
       OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:-replace-with-a-long-minio-password}
 
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["production"]
+    environment:
+      DEPLOYMENT_DOMAIN: ${DEPLOYMENT_DOMAIN:-}
+      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:-}
+    command: ["/bin/sh", "-c", "test -n \"$${DEPLOYMENT_DOMAIN}\" && test -n \"$${CADDY_ACME_EMAIL}\" && caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_started
+
 volumes:
   postgres_data:
   redis_data:
   minio_data:
+  caddy_data:
+  caddy_config:

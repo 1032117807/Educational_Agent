@@ -18,6 +18,7 @@ __pycache__
 .env
 data
 dist
+app/PersonalLearningDesktop
 models
 *.egg-info
 nuitka-crash-report.xml

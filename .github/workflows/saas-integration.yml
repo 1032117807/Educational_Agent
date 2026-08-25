@@ -18,6 +18,20 @@ on:
   workflow_dispatch:
 
 jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run full regression suite
+        run: python -m pytest -q
+
   verify-saas-stack:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -30,7 +44,8 @@ jobs:
       REDIS_PASSWORD: ci-redis-password-not-for-production
       OBJECT_STORAGE_ACCESS_KEY: learning-ci
       OBJECT_STORAGE_SECRET_KEY: ci-minio-secret-not-for-production
-      CORS_ORIGINS: http://localhost:8000
+      CORS_ORIGINS: https://ci.example.test
+      TZ: Asia/Shanghai
       LEARNING_AI_ENABLED: "false"
       LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY: "false"
     steps:
@@ -46,12 +61,20 @@ jobs:
           APP_DB_USER=learning_app
           APP_DB_PASSWORD=ci-runtime-password-not-for-production
           REDIS_PASSWORD=ci-redis-password-not-for-production
+          REDIS_URL=redis://:ci-redis-password-not-for-production@redis:6379/0
+          DATABASE_URL=postgresql+psycopg://learning_app:ci-runtime-password-not-for-production@postgres:5432/learning
           OBJECT_STORAGE_ACCESS_KEY=learning-ci
           OBJECT_STORAGE_SECRET_KEY=ci-minio-secret-not-for-production
-          CORS_ORIGINS=http://localhost:8000
+          CORS_ORIGINS=https://ci.example.test
+          DEPLOYMENT_DOMAIN=ci.example.test
+          CADDY_ACME_EMAIL=ci@example.test
+          TZ=Asia/Shanghai
           LEARNING_AI_ENABLED=false
           LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY=false
           EOF
+
+      - name: Validate production environment shape
+        run: python scripts/validate_production_env.py --env-file .env
 
       - name: Build and start SaaS services
         run: docker compose -f docker-compose.saas.yml up -d --build
@@ -73,6 +96,12 @@ jobs:
             -e DATABASE_URL="postgresql+psycopg://learning:${POSTGRES_PASSWORD}@postgres:5432/learning" \
             -e APP_DB_USER="${APP_DB_USER}" \
             api python scripts/verify_saas_integration.py
+
+      - name: Verify HTTP security headers
+        run: python scripts/verify_http_security.py --base-url http://127.0.0.1:8000
+
+      - name: Run disposable learning-loop smoke test
+        run: python scripts/smoke_test_saas.py --base-url http://127.0.0.1:8000
 
       - name: Show service logs on failure
         if: failure()

@@ -30,12 +30,24 @@ class Course(Base):
     last_opened_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class CourseNote(Base):
+    __tablename__ = "course_notes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True)
+    title: Mapped[str] = mapped_column(String(160), default="学习笔记")
+    content: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class StudyTask(Base):
     __tablename__ = "study_tasks"
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     title: Mapped[str] = mapped_column(String(160), index=True)
     course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id"), nullable=True)
+    knowledge_point_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_points.id"), nullable=True, index=True)
     task_type: Mapped[str] = mapped_column(String(30), default="学习")
     planned_date: Mapped[date] = mapped_column(Date, default=date.today, index=True)
     duration_minutes: Mapped[int] = mapped_column(Integer, default=30)
@@ -44,6 +56,8 @@ class StudyTask(Base):
     note: Mapped[str] = mapped_column(Text, default="")
     source: Mapped[str] = mapped_column(String(20), default="user")
     recurrence_key: Mapped[str] = mapped_column(String(80), default="")
+    status: Mapped[str] = mapped_column(String(20), default="planned", index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed: Mapped[bool] = mapped_column(Boolean, default=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -77,6 +91,9 @@ class ReviewItem(Base):
     next_review: Mapped[date] = mapped_column(Date, default=date.today, index=True)
     note: Mapped[str] = mapped_column(Text, default="")
     error_reason: Mapped[str] = mapped_column(String(300), default="")
+    ai_analysis: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+    last_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     source: Mapped[str] = mapped_column(String(20), default="user")
 
 
@@ -113,6 +130,11 @@ class KnowledgePoint(Base):
     difficulty: Mapped[int] = mapped_column(Integer, default=3)
     importance: Mapped[int] = mapped_column(Integer, default=3)
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    practice_count: Mapped[int] = mapped_column(Integer, default=0)
+    correct_count: Mapped[int] = mapped_column(Integer, default=0)
+    wrong_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_studied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_review_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     source: Mapped[str] = mapped_column(String(20), default="user")
     vector_id: Mapped[str | None] = mapped_column(
         String(100), nullable=True, unique=True
@@ -165,6 +187,21 @@ class ReviewAttempt(Base):
     previous_streak: Mapped[int] = mapped_column(Integer, default=0)
     next_review: Mapped[date] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class LearningEvent(Base):
+    """Canonical event stream for analytics and adaptive planning."""
+    __tablename__ = "learning_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    user_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    event_type: Mapped[str] = mapped_column(String(60), index=True)
+    course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id"), nullable=True, index=True)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("study_tasks.id"), nullable=True, index=True)
+    question_id: Mapped[int | None] = mapped_column(ForeignKey("questions.id"), nullable=True, index=True)
+    knowledge_point_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_points.id"), nullable=True, index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
 
 
 class StudySession(Base):

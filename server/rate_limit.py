@@ -66,6 +66,10 @@ class RedisRateLimiter:
                 raise
             return RateLimitDecision(True, limit, 0)
 
+    def ping(self) -> bool:
+        """Verify the shared Redis dependency used by production rate limits."""
+        return bool(self._client().ping())
+
 
 def rate_limit_response(decision: RateLimitDecision) -> Response:
     response = JSONResponse(status_code=429, content={"detail": "rate limit exceeded"})

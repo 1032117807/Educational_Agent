@@ -1,7 +1,9 @@
+from datetime import date
+
 from server.ai_services.agent import infer_actions, plan_actions, run_learning_agent
 from app.database import Database
-from app.models import AgentMemory, AgentMessage, Course
-from server.agent_stream import _bounded_session_history, _collect_runtime_context, _memory_candidate, _requested_artifact, _requests_web_search, _should_use_parallel_subagents
+from app.models import AgentMemory, AgentMessage, Course, KnowledgePoint, Question, ReviewItem, StudyTask
+from server.agent_stream import _bounded_session_history, _collect_runtime_context, _is_learning_launch_request, _memory_candidate, _requested_artifact, _requests_web_search, _should_use_parallel_subagents, learning_snapshot, rich_response_blocks
 
 
 def test_chinese_agent_intents_are_routed() -> None:
@@ -9,6 +11,16 @@ def test_chinese_agent_intents_are_routed() -> None:
     assert "create_goal" in infer_actions("创建一个学习目标")
     assert "generate_plan" in infer_actions("帮我制定学习计划")
     assert "generate_questions" in infer_actions("根据资料生成练习题")
+
+
+def test_rich_blocks_turn_chinese_exam_style_questions_into_clickable_quiz_data() -> None:
+    blocks = rich_response_blocks(
+        "**第2题（句子听辨）**\n你听到一句话，这句话最可能出现什么场景？\n"
+        "A. 新闻报道\nB. 学术讲座\nC. 日常对话\nD. 商业广告\n"
+    )
+    quiz = next(block for block in blocks if block["type"] == "quiz")
+    assert quiz["questions"][0]["number"] == 2
+    assert quiz["questions"][0]["options"][1] == {"id": "B", "label": "学术讲座"}
 
 
 def test_model_action_plan_is_primary_when_structured_output_is_available() -> None:
@@ -75,9 +87,17 @@ def test_background_web_runtime_retries_a_transient_action_failure(monkeypatch) 
 
 def test_stream_agent_detects_web_memory_and_explicit_artifacts() -> None:
     assert _requests_web_search("请联网搜索资料")
+    assert _requests_web_search("帮我找资料并列出来源")
     assert _memory_candidate("记住我薄弱的是线性代数", None)["category"] == "weak_point"
     assert _requested_artifact("请导出为 markdown 文件", []) == "markdown_report"
     assert _requested_artifact("给我学习总结", []) is None
+
+
+def test_daily_task_request_is_a_single_learning_launch_not_question_only() -> None:
+    assert _is_learning_launch_request("请直接生成六级备考的具体任务，每周固定任务，细化到每天，并为每项任务配练习题")
+    assert not _is_learning_launch_request("给我生成五道英语练习题")
+    assert not _requests_web_search("请生成六级备考的每日学习任务")
+    assert _requests_web_search("六级什么时候考试")
 
 
 def test_parallel_subagents_require_a_clear_independent_workload() -> None:
@@ -163,3 +183,29 @@ def test_session_history_is_bounded_and_preserves_latest_turns() -> None:
     history = _bounded_session_history(rows, limit=4, max_chars=100)
 
     assert [item["content"] for item in history] == ["turn-16", "turn-17", "turn-18", "turn-19"]
+
+
+def test_learning_snapshot_exposes_actionable_tutor_context(tmp_path) -> None:
+    database = Database(f"sqlite:///{(tmp_path / 'tutor-snapshot.db').as_posix()}")
+    database.create_schema()
+    with database.session() as db:
+        course = Course(tenant_id="tenant-a", name="Calculus")
+        db.add(course)
+        db.flush()
+        point = KnowledgePoint(tenant_id="tenant-a", course_id=course.id, name="Limits", mastery=38, importance=5)
+        question = Question(tenant_id="tenant-a", course_id=course.id, knowledge_point_id=point.id, prompt="Limit question", answer="A")
+        db.add_all([point, question])
+        db.flush()
+        db.add_all([
+            StudyTask(tenant_id="tenant-a", course_id=course.id, title="Review limits", planned_date=date.today(), duration_minutes=25),
+            ReviewItem(tenant_id="tenant-a", question_id=question.id, title="Limit question", next_review=date.today(), wrong_count=2),
+        ])
+    try:
+        with database.session() as db:
+            snapshot = learning_snapshot(db, "tenant-a", course.id)
+        assert snapshot["available_minutes"] == 25
+        assert snapshot["today"]["due_review_count"] == 1
+        assert snapshot["review_queue"]["items"][0]["question_id"] == question.id
+        assert snapshot["knowledge_mastery"][0]["name"] == "Limits"
+    finally:
+        database.close()

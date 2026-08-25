@@ -4,13 +4,14 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 import socket
 import tempfile
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -241,6 +242,19 @@ class ResearchCurationService:
         opener = build_opener(_NoRedirect())
         with opener.open(request, timeout=30) as response:
             content_type = response.headers.get_content_type().lower()
+            # Search engines often return a course page rather than the PDF
+            # itself. Follow an explicit public PDF link on that page instead
+            # of storing unsupported HTML in the learner's knowledge base.
+            if content_type == "text/html":
+                page = response.read(cls.MAX_DOWNLOAD_BYTES + 1)
+                if len(page) > cls.MAX_DOWNLOAD_BYTES:
+                    raise ValueError("Resource page is larger than 8 MB")
+                links = re.findall(r'''href=["']([^"'#?]+(?:\.pdf)(?:\?[^"']*)?)["']''', page.decode("utf-8", errors="ignore"), flags=re.I)
+                for link in links:
+                    candidate = urljoin(url, unquote(link).strip())
+                    if candidate.lower().split("?", 1)[0].endswith(".pdf"):
+                        return cls._download_public_file(candidate, target)
+                raise ValueError("该资料页未找到可下载的 PDF 文件")
             suffix = cls.ALLOWED_CONTENT_TYPES.get(content_type)
             if suffix is None:
                 raise ValueError(f"Unsupported content type: {content_type}")

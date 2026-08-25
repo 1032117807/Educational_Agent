@@ -14,6 +14,6 @@ def test_empty_sqlite_database_reaches_current_head(tmp_path: Path) -> None:
     command.upgrade(config, "head")
     engine = create_engine(database_url)
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "g11_embedding_dimension_512"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "g16_course_notes"
     names = set(inspect(engine).get_table_names())
-    assert {"courses", "audit_events", "document_indexes"}.issubset(names)
+    assert {"courses", "audit_events", "document_indexes", "course_notes"}.issubset(names)

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from functools import cached_property
 import base64
 import json
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
@@ -78,7 +79,10 @@ class PaddleOCRService:
         """第一次真正执行 OCR 时才加载模型。"""
 
         try:
-            from paddleocr import PaddleOCR
+            # Keep PaddleOCR optional so the desktop release does not bundle
+            # Paddle's large training/runtime stack. Remote OCR and native PDF
+            # text extraction remain available without this dependency.
+            PaddleOCR = import_module("paddleocr").PaddleOCR
         except ImportError as exc:
             raise DocumentParseError(
                 "OCR 组件未安装。请安装 paddlepaddle 和 paddleocr。"

@@ -24,7 +24,6 @@ requests>=2.31,<3.0
 docker>=7.0,<8.0
 PyJWT>=2.9,<3.0
 pwdlib[argon2]>=0.2,<1.0
-# Local CPU OCR fallback for scanned PDFs. PaddleOCR downloads model weights
-# into its cache on first use when no model directory is mounted.
-paddlepaddle>=3.0,<4.0
-paddleocr>=3.0,<4.0
+# PaddleOCR is an optional local fallback for scanned PDFs. The SaaS image
+# uses the OpenAI-compatible vision OCR path by default so the core image
+# stays smaller and does not download a second model stack during deployment.

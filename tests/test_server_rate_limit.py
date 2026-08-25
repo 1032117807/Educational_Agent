@@ -20,6 +20,9 @@ class FakeRedis:
         self.expirations[key] = seconds
         return True
 
+    def ping(self) -> bool:
+        return True
+
 
 class BrokenRedis:
     def incr(self, key: str) -> int:
@@ -61,8 +64,20 @@ def test_production_raises_when_redis_is_unavailable() -> None:
         object_storage_endpoint="https://storage.example.test",
         object_storage_access_key="access",
         object_storage_secret_key="secret",
+        cors_origins="https://learn.example.test",
         redis_password="redis-secret-value-123",
         redis_url="redis://:redis-secret-value-123@redis:6379/0",
     )
     with pytest.raises(RedisError):
         RedisRateLimiter(settings, client=BrokenRedis()).check(request("/v1/courses"))
+
+
+def test_ping_checks_the_shared_redis_client() -> None:
+    assert RedisRateLimiter(ServerSettings(), client=FakeRedis()).ping() is True
+
+
+def test_public_proxy_uses_caddy_safe_forwarding_defaults() -> None:
+    caddyfile = open("docker/caddy/Caddyfile", encoding="utf-8").read()
+    assert "\tlog\n" in caddyfile
+    assert "reverse_proxy api:8000" in caddyfile
+    assert "header_up X-Forwarded" not in caddyfile

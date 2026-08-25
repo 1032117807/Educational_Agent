@@ -24,7 +24,15 @@ def bootstrap(config: AppSettings = settings) -> tuple[LearningService, AppSetti
         Path(__file__).resolve().parents[1] / "alembic.ini",
     ]
     migration_config = next((path for path in migration_candidates if path.exists()), None)
-    has_migration_state = inspect(database.engine).has_table("alembic_version")
+    has_migration_state = False
+    if inspect(database.engine).has_table("alembic_version"):
+        with database.engine.connect() as connection:
+            # Legacy desktop databases may contain the bookkeeping table but
+            # no revision row. They must use the additive compatibility path,
+            # not replay the entire migration history over existing tables.
+            has_migration_state = connection.exec_driver_sql(
+                "SELECT 1 FROM alembic_version LIMIT 1"
+            ).first() is not None
     if migration_config is not None and (
         not database_existed or has_migration_state
     ):

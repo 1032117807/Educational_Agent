@@ -37,7 +37,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-qt>=4.4"]
-build = ["Nuitka==2.5.1"]
+build = ["PyInstaller==6.11.1"]
 ocr = [
   "paddleocr>=3.5,<4",
 ]

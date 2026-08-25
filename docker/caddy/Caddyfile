@@ -1,0 +1,14 @@
+{
+	email {$CADDY_ACME_EMAIL}
+}
+
+{$DEPLOYMENT_DOMAIN} {
+	# Structured access logs are emitted to the container log stream so the
+	# deployment platform can retain and alert on public request failures.
+	log
+	encode zstd gzip
+	# Caddy's reverse proxy ignores client-supplied X-Forwarded-* values and
+	# reconstructs them from the public connection by default. The API can
+	# therefore safely use X-Forwarded-For for rate-limit partitioning.
+	reverse_proxy api:8000
+}

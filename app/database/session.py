@@ -34,6 +34,9 @@ class Database:
                 "note": "TEXT NOT NULL DEFAULT ''",
                 "source": "VARCHAR(20) NOT NULL DEFAULT 'user'",
                 "recurrence_key": "VARCHAR(80) NOT NULL DEFAULT ''",
+                "knowledge_point_id": "INTEGER",
+                "status": "VARCHAR(20) NOT NULL DEFAULT 'planned'",
+                "started_at": "DATETIME",
             },
             "questions": {
                 "explanation": "TEXT NOT NULL DEFAULT ''",
@@ -42,7 +45,7 @@ class Database:
                 "knowledge_point_id": "INTEGER",
                 "source": "VARCHAR(20) NOT NULL DEFAULT 'user'",
             },
-            "knowledge_points": {
+                "knowledge_points": {
                 "category": "VARCHAR(30) NOT NULL DEFAULT '概念'",
                 "definition": "TEXT NOT NULL DEFAULT ''",
                 "formula": "TEXT NOT NULL DEFAULT ''",
@@ -55,15 +58,27 @@ class Database:
                 "source": "VARCHAR(20) NOT NULL DEFAULT 'user'",
                 "vector_id": "VARCHAR(100)",
                 "embedding_model": "VARCHAR(160) NOT NULL DEFAULT ''",
+                "practice_count": "INTEGER NOT NULL DEFAULT 0",
+                "correct_count": "INTEGER NOT NULL DEFAULT 0",
+                "wrong_count": "INTEGER NOT NULL DEFAULT 0",
+                "last_studied_at": "DATETIME",
+                "next_review_at": "DATETIME",
             },
             "knowledge_point_drafts": {
+                "tenant_id": "VARCHAR(36)",
                 "category": "VARCHAR(30) NOT NULL DEFAULT '概念'",
                 "difficulty": "INTEGER NOT NULL DEFAULT 3",
                 "confidence": "FLOAT NOT NULL DEFAULT 0",
             },
+            "question_drafts": {
+                "tenant_id": "VARCHAR(36)",
+            },
             "review_items": {
                 "source": "VARCHAR(20) NOT NULL DEFAULT 'user'",
                 "error_reason": "VARCHAR(300) NOT NULL DEFAULT ''",
+                "ai_analysis": "TEXT NOT NULL DEFAULT ''",
+                "created_at": "DATETIME",
+                "last_reviewed_at": "DATETIME",
             },
             "resource_files": {
                 "original_name": "VARCHAR(255) NOT NULL DEFAULT ''",

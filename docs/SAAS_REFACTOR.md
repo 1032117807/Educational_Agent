@@ -107,7 +107,7 @@ RAG 任务完成后可用 `ai_run_id` 查询回答、检索模式和按编号排
 | `LEARNING_AI_API_KEY` | 使用云端大模型时必需 | 问答、抽取、出题、批改、报告 | 使用 OpenAI 或兼容供应商的一把服务端 Key。前端和桌面端都不能保存它。 |
 | Embedding API Key | 取决于实现 | 向量化 | 当前 `FastEmbed + BAAI/bge-small-zh-v1.5` 是本地模型，**不需要 API Key**；若改用 OpenAI/Cohere 等托管 embedding，才需要其 Key。 |
 | `TAVILY_API_KEY` | 可选 | 联网检索 | 仅在启用研究/网页搜索时需要。 |
-| Redis 密码 | 生产必需 | 队列、缓存、限流 | 本地 Compose 未启用认证，只能用于开发。 |
+| Redis 密码 | 生产必需 | 队列、缓存、限流 | SaaS Compose 通过 `REDIS_URL` 使用认证连接；生产环境必须配置强密码。 |
 
 不要把真实 Key 写进 Git、前端打包产物、桌面安装包、日志或数据库。当前本机 `.env` 若包含已泄露的密钥，应立刻到对应供应商控制台吊销后生成新 Key。
 
@@ -149,20 +149,17 @@ LEARNING_AI_CHAT_MODEL=<chat-model-name>
 LEARNING_AI_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY=true
 LEARNING_AI_EMBEDDING_MODEL_DIR=/opt/models/bge-small-zh-v1.5
-LEARNING_AI_EMBEDDING_DIMENSIONS=384
+LEARNING_AI_EMBEDDING_DIMENSIONS=512
 ```
 
 本地 embedding 方案没有 embedding API Key，但运行节点必须有模型文件和足够 CPU/RAM。若使用托管 embedding，请额外配置供应商的 embedding API Key，并将 `LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY=false`。
-当前 `document_embeddings` 的 pgvector schema 是 `vector(384)`，因此只能使用 384 维 embedding；切换 768/1536 等维度需要先发布新的数据库迁移，并对全部资料重新建索引。回填工具只需要 PostgreSQL 数据库凭证，不需要大模型或 embedding API Key。
+当前 `document_embeddings` 的 pgvector schema 是 `vector(512)`，因此只能使用 512 维 embedding；切换 384/768/1536 等维度需要先发布新的数据库迁移，并对全部资料重新建索引。回填工具只需要 PostgreSQL 数据库凭证，不需要大模型或 embedding API Key。
 
-## 还需继续迁移
+## 历史迁移路线与运营项
 
-1. 为所有业务表补齐 `tenant_id`，并在每个 Repository/API 查询处强制条件过滤。
-2. 将 `workspace` 文件改为 S3/MinIO object key，上传和解析放入 Redis worker。
-3. 将既有 Chroma 检索调用替换为 `PgVectorStore`，在 `index_resource` worker 中下载对象到临时目录、解析、向量化并写入 pgvector。
-4. 为课程、资源、索引和 RAG API 建立端到端的租户越权测试。
-5. 在 Redis 或 API 网关加入分布式速率限制、OAuth/邮件验证、备份恢复和监控告警。不能使用进程内计数器代替限流，因为多 API 实例会绕过它。
-6. 历史数据回填并审核 `pending_rows` 后执行 `alembic upgrade head`；`g8_postgres_rls` 会检查所有租户表无 NULL `tenant_id` 后启用数据库 RLS。API 会在每个认证请求中设置 `app.tenant_id`，RLS 与 API 条件形成双重隔离。
+以下路线已经落地到当前代码和迁移链：业务表租户隔离、S3/MinIO 对象存储、Redis worker、pgvector 检索、越权回归测试、分布式限流，以及 `tenant_id NOT NULL` 与数据库 RLS。历史数据回填仍必须按部署手册先预览、备份、审核 `pending_rows`，再执行迁移。
+
+正式运营还需要在真实环境完成 OAuth/邮件验证（如果产品需要）、备份恢复演练、监控告警、HTTPS 域名和 Windows 代码签名；这些不是本地单测可以替代的验收项。
 
 ## 当前验收状态
 
@@ -176,5 +173,5 @@ Production Redis requires a URL-safe `REDIS_PASSWORD` (letters, numbers, `.`, `_
 - FastAPI 导入检查：通过。
 - 身份、JWT、任务队列、对象 key 和索引 worker 单测：通过。
 - 现有向量、混合检索、引用 RAG 和 ingestion 回归：通过。
-- 当前机器没有 Docker、PostgreSQL、Redis、MinIO 可执行环境；因此 PostgreSQL/pgvector 真实实例、Redis worker 和 MinIO 上传尚未执行，不能把本地单测当作基础设施验收。安装 Docker 后必须先 `docker compose -f docker-compose.saas.yml up -d --build`，再用显式 `DATABASE_URL` 执行迁移和 `scripts/verify_saas_integration.py`。
-- 尚未完成的生产项：真实 PostgreSQL 上执行回填和 RLS 集成演练、将 `tenant_id` 收紧为非空、邮件验证、监控、正式对象存储备份，以及 Web 前端和其余业务 API 的迁移。
+- 本机已完成 Docker Compose PostgreSQL/pgvector、Redis、MinIO、API/worker 的真实集成验证，并通过 `scripts/verify_saas_integration.py` 与 `scripts/smoke_test_saas.py`。这不替代正式环境的域名、真实密钥、备份恢复演练、监控和代码签名验收。
+- 仍需在正式环境完成的发布门槛：配置真实 HTTPS 域名与证书、执行并保留恢复测试、接入监控告警、配置邮件/OAuth（如产品需要），以及使用受信任证书签署 Windows 安装包。详见 `docs/PRODUCTION_RELEASE.md`。

@@ -32,17 +32,17 @@ LEARNING_AI_CHAT_MODEL=gpt-4.1-mini
 
 ## Embedding 模型与 Key
 
-当前实现使用本地 FastEmbed 模型 `BAAI/bge-small-zh-v1.5`，输出固定为 384 维，因此**不需要 embedding API Key**：
+当前实现使用本地 FastEmbed 模型 `BAAI/bge-small-zh-v1.5`，输出固定为 512 维，因此**不需要 embedding API Key**：
 
 ```dotenv
 LEARNING_AI_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
-LEARNING_AI_EMBEDDING_DIMENSIONS=384
+LEARNING_AI_EMBEDDING_DIMENSIONS=512
 LEARNING_AI_EMBEDDING_LOCAL_FILES_ONLY=true
 ```
 
 开启本地只读模式时，模型文件必须已存在于 `LEARNING_AI_EMBEDDING_MODEL_DIR`。首次下载需要出网，但不需要模型供应商的 Key。
 
-当前 `FastEmbedEmbeddings` 适配器尚未实现 OpenAI、Cohere 等托管 embedding。不能只增加环境变量或填写 Key 就认为托管 embedding 已启用。接入托管 embedding 需要：编写供应商适配器、配置供应商 Key、发布匹配的 `vector(n)` 数据库迁移，以及对所有资料全量重建索引。当前 pgvector schema 只接受 384 维向量。
+当前 `FastEmbedEmbeddings` 适配器尚未实现 OpenAI、Cohere 等托管 embedding。不能只增加环境变量或填写 Key 就认为托管 embedding 已启用。接入托管 embedding 需要：编写供应商适配器、配置供应商 Key、发布匹配的 `vector(n)` 数据库迁移，以及对所有资料全量重建索引。当前 pgvector schema 只接受 512 维向量。
 
 ## 可选联网搜索
 

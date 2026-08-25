@@ -13,7 +13,7 @@ TENANT_TABLES = (
     "document_chunks", "document_embeddings", "ai_runs", "ai_citations", "knowledge_point_drafts",
     "question_drafts", "subjective_grading_results", "error_analysis_results", "learning_plan_drafts",
     "adaptive_plan_drafts", "learning_report_snapshots", "research_runs", "agent_sessions",
-    "agent_memories", "agent_workflows", "audit_events",
+    "agent_memories", "agent_workflows", "audit_events", "learning_events", "course_notes",
 )
 
 

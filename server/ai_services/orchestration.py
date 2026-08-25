@@ -11,7 +11,10 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import AICitation, AIRun, BackgroundJob, Course, KnowledgePoint, Question, QuestionAttempt, StudyGoal, StudySession, StudyTask
+from app.models import (
+    AICitation, AIRun, BackgroundJob, Course, KnowledgePoint, KnowledgePointDraft,
+    KnowledgePointDraftCitation, Question, QuestionAttempt, StudyGoal, StudySession, StudyTask,
+)
 from server.rag_retriever import TenantPgVectorRetriever
 from ai.gateways.rerank import Reranker
 from server.tenant_session import set_session_tenant
@@ -21,6 +24,15 @@ SUPPORTED_FEATURES = {
     "knowledge_extraction", "subjective_grading", "error_analysis",
     "learning_plan", "learning_report", "research_curation", "agent_chat",
 }
+
+_INTERNAL_TASK_TERMS = (
+    "下载", "检索", "搜索", "整理资料", "分析资料", "教材", "文件", "资源",
+    "索引", "题库管理", "workflow", "agent", "资料库",
+)
+
+
+def _is_internal_workflow_task(title: object) -> bool:
+    return any(term in str(title or "").casefold() for term in _INTERNAL_TASK_TERMS)
 
 
 def _json_object(content: object) -> dict[str, object]:
@@ -45,7 +57,7 @@ def _prompt(feature: str, request: str, context: dict[str, object], evidence: st
     if feature == "error_analysis":
         return f"{common} Analyze learning errors. JSON: {{\"error_types\":[],\"severity\":\"low|medium|high\",\"explanation\":\"... [1]\",\"missing_knowledge\":[],\"recommended_exercises\":[],\"confidence\":0.0,\"needs_human_review\":true,\"citations\":[1]}}. Attempt: {json.dumps(context, ensure_ascii=False)}\nEvidence:\n{evidence}"
     if feature == "learning_plan":
-        return f"{common} Create a realistic study-plan draft. JSON: {{\"summary\":\"\",\"risks\":[],\"tasks\":[{{\"title\":\"\",\"date\":\"YYYY-MM-DD\",\"scheduled_time\":\"HH:MM\",\"duration_minutes\":30,\"priority\":\"medium\",\"type\":\"study\",\"reason\":\"\"}}]}}. Use dates from {date.today().isoformat()} through the target date. Do not schedule more than {context['weekly_minutes']} minutes per week. Context: {json.dumps(context, ensure_ascii=False)}"
+        return f"{common} You are the task-scheduling agent. Create only learner-facing tasks that state exactly what the learner studies, practises, reviews, or completes. Never output internal operations such as searching, downloading, indexing, analysing materials, managing a question bank, Agent work, or workflow steps. JSON: {{\"summary\":\"\",\"risks\":[],\"tasks\":[{{\"title\":\"\",\"date\":\"YYYY-MM-DD\",\"scheduled_time\":\"HH:MM\",\"duration_minutes\":30,\"priority\":\"medium\",\"type\":\"study\",\"reason\":\"\"}}]}}. Use dates from {date.today().isoformat()} through the target date. Do not schedule more than {context['weekly_minutes']} minutes per week. Context: {json.dumps(context, ensure_ascii=False)}"
     if feature == "learning_report":
         return f"{common} Explain these computed learning statistics without inventing facts. JSON: {{\"summary\":\"\",\"strengths\":[],\"weaknesses\":[],\"recommendations\":[],\"next_week_priorities\":[]}}. Stats: {json.dumps(context, ensure_ascii=False)}"
     if feature == "research_curation":
@@ -89,7 +101,15 @@ def run_ai_feature(*, payload: dict[str, object], session_factory: Callable[[], 
         course_id, context, retrieval_query = _context(session, tenant_id, feature, data)
         retriever = TenantPgVectorRetriever(session=session, embeddings=embeddings, embedding_version=embedding_version, dimensions=dimensions, reranker=reranker, rerank_candidate_limit=rerank_candidate_limit, query_rewrite_enabled=query_rewrite_enabled, hybrid_retrieval_enabled=hybrid_retrieval_enabled)
         needs_evidence = feature not in {"learning_plan", "learning_report"}
-        hits = retriever.retrieve(retrieval_query, tenant_id=tenant_id, course_id=course_id) if needs_evidence else []
+        resource_ids = data.get("resource_ids") if feature == "knowledge_extraction" else None
+        if resource_ids is not None and (not isinstance(resource_ids, list) or any(not isinstance(item, int) for item in resource_ids)):
+            raise ValueError("resource_ids must be a list of integers")
+        hits = retriever.retrieve(
+            retrieval_query,
+            tenant_id=tenant_id,
+            course_id=course_id,
+            resource_ids=resource_ids or None,
+        ) if needs_evidence else []
         if needs_evidence and not hits: raise ValueError("no indexed evidence found for this AI task")
         response = chat_model.invoke(_prompt(feature, str(data.get("request", "")), context, _evidence(hits)))
         output = _json_object(response.content)
@@ -111,6 +131,8 @@ def run_ai_feature(*, payload: dict[str, object], session_factory: Callable[[], 
                 }
             for item in output.get("tasks", []) if isinstance(output.get("tasks"), list) else []:
                 if not isinstance(item, dict) or not item.get("title") or not item.get("date"):
+                    continue
+                if _is_internal_workflow_task(item.get("title")):
                     continue
                 try:
                     planned_date = date.fromisoformat(str(item["date"]))
@@ -138,11 +160,46 @@ def run_ai_feature(*, payload: dict[str, object], session_factory: Callable[[], 
                 existing.add(key)
                 minutes_by_week[week_key] = minutes_by_week.get(week_key, 0) + minutes
         citations = output.get("citations", [])
+        extracted_drafts: list[tuple[dict[str, object], list[int]]] = []
         if needs_evidence:
-            if not isinstance(citations, list) or not citations or any(not isinstance(x, int) or x < 1 or x > len(hits) for x in citations): raise ValueError("AI output must contain valid evidence citations")
+            if feature == "knowledge_extraction":
+                raw_drafts = output.get("knowledge_points")
+                if not isinstance(raw_drafts, list) or not raw_drafts:
+                    raise ValueError("knowledge extraction must return at least one knowledge point")
+                for item in raw_drafts:
+                    if not isinstance(item, dict) or not str(item.get("name", "")).strip():
+                        raise ValueError("knowledge point draft is missing a name")
+                    item_citations = item.get("citations")
+                    if (not isinstance(item_citations, list) or not item_citations
+                            or any(not isinstance(x, int) or x < 1 or x > len(hits) for x in item_citations)):
+                        raise ValueError("each knowledge point draft must contain valid evidence citations")
+                    extracted_drafts.append((item, list(dict.fromkeys(item_citations))))
+            elif not isinstance(citations, list) or not citations or any(not isinstance(x, int) or x < 1 or x > len(hits) for x in citations):
+                raise ValueError("AI output must contain valid evidence citations")
         run = AIRun(tenant_id=tenant_id, run_uuid=str(uuid4()), feature=feature, status="completed", provider=provider, model_name=model_name, prompt_version="saas-ai-services-v1", input_json=json.dumps(data, ensure_ascii=False), output_json=json.dumps(output, ensure_ascii=False), course_id=course_id, finished_at=datetime.now())
         session.add(run); session.flush()
         for number, hit in enumerate(hits, 1): session.add(AICitation(tenant_id=tenant_id, ai_run_id=run.id, chunk_id=hit.chunk_id, citation_number=number, quote_text=hit.content[:1000], relevance_score=hit.rrf_score))
+        for item, item_citations in extracted_drafts:
+            if course_id is None:
+                raise ValueError("knowledge extraction requires a course")
+            draft = KnowledgePointDraft(
+                tenant_id=tenant_id,
+                ai_run_id=run.id,
+                course_id=course_id,
+                name=str(item.get("name", "")).strip()[:160],
+                category=str(item.get("category", "concept"))[:30],
+                definition=str(item.get("definition", ""))[:20000],
+                formula=str(item.get("formula", ""))[:20000],
+                difficulty=max(1, min(5, int(item.get("difficulty", 3)))),
+                importance=max(1, min(5, int(item.get("importance", 3)))),
+                confidence=max(0.0, min(1.0, float(item.get("confidence", 0.0)))),
+            )
+            session.add(draft); session.flush()
+            for citation_number in item_citations:
+                hit = hits[citation_number - 1]
+                session.add(KnowledgePointDraftCitation(
+                    draft_id=draft.id, chunk_id=hit.chunk_id, quote_text=hit.content[:1000],
+                ))
         next_plan_job_id = None
         if feature == "learning_report" and data.get("goal_id"):
             plan = BackgroundJob(
@@ -156,4 +213,4 @@ def run_ai_feature(*, payload: dict[str, object], session_factory: Callable[[], 
         session.commit()
         return {"ai_run_id": run.id, "feature": feature, "output": output,
                 "evidence_count": len(hits), "created_task_count": created_tasks,
-                "next_plan_job_id": next_plan_job_id}
+                "knowledge_draft_count": len(extracted_drafts), "next_plan_job_id": next_plan_job_id}

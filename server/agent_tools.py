@@ -125,10 +125,23 @@ class WebAgentToolExecutor:
             payload = response.json()
         except Exception as exc:
             raise RuntimeError(f"web search failed: {exc}") from exc
-        return [
+        results = [
             {"title": str(item.get("title", ""))[:500], "url": str(item.get("url", "")), "description": str(item.get("content", ""))[:1600]}
             for item in payload.get("results", []) if isinstance(item, dict)
         ]
+        # For material-seeking requests, a timetable or administrative notice
+        # is not a study resource. Keep schedule lookups intact, but rank them
+        # out of the dedicated research Agent's learning-material candidates.
+        material_request = any(term in query.casefold() for term in (
+            "资料", "教材", "真题", "练习", "题目", "教程", "课程", "学习材料",
+            "study material", "practice", "tutorial", "lecture",
+        ))
+        if material_request:
+            notice_terms = ("通知", "公告", "报名", "考试时间", "考试安排", "admission", "notice", "schedule")
+            learning_terms = ("教材", "真题", "练习", "教程", "课程", "听力", "阅读", "写作", "题库", "pdf", "lesson", "practice")
+            focused = [item for item in results if not any(term in f"{item['title']} {item['description']}".casefold() for term in notice_terms) and any(term in f"{item['title']} {item['description']}".casefold() for term in learning_terms)]
+            results = focused
+        return results[:max(1, min(max_results, 10))]
 
     def fetch_public_url(self, url: str) -> str:
         parsed = urlparse(url)

@@ -215,6 +215,7 @@ class KnowledgePointDraft(Base):
     __tablename__ = "knowledge_point_drafts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     ai_run_id: Mapped[int] = mapped_column(
         ForeignKey("ai_runs.id"),
         index=True,
@@ -287,6 +288,7 @@ class QuestionDraft(Base):
     __tablename__ = "question_drafts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     ai_run_id: Mapped[int] = mapped_column(
         ForeignKey("ai_runs.id"),
         index=True,
