@@ -23,6 +23,21 @@ WEB_AGENT_ACTIONS = (
 )
 
 
+def is_general_creation_request(message: str) -> bool:
+    """Keep explicitly requested code and diagrams in the conversational lane."""
+    value = message.casefold()
+    code_terms = (
+        "\u5199\u4ee3\u7801", "\u4ee3\u7801", "\u7f16\u7a0b", "\u51fd\u6570", "\u7b97\u6cd5",
+        "python", "javascript", "typescript", "react", "html", "css", "sql", "debug",
+        "bug", "api ", "api\u3002", "api\uff0c",
+    )
+    diagram_terms = (
+        "\u753b\u56fe", "\u7ed8\u56fe", "\u6d41\u7a0b\u56fe", "\u793a\u610f\u56fe", "\u601d\u7ef4\u5bfc\u56fe",
+        "\u67b6\u6784\u56fe", "diagram", "flowchart", "mermaid", "draw a ",
+    )
+    return any(term in value for term in (*code_terms, *diagram_terms))
+
+
 class WebActionPlan(BaseModel):
     """Public action plan only; this schema never captures hidden reasoning."""
 
@@ -59,6 +74,8 @@ def plan_actions(message: str, *, chat_model: BaseChatModel | None = None) -> li
 def infer_actions(message: str) -> list[str]:
     """Route Chinese and English requests to the shared desktop-style actions."""
     value = message.casefold().strip()
+    if is_general_creation_request(message):
+        return ["chat"]
     if any(term in value for term in ("\u80cc\u5355\u8bcd", "\u5355\u8bcd", "\u8bcd\u6c47")):
         return ["chat"]
     # Keep a Unicode-native fallback for Web requests. Older deployments may

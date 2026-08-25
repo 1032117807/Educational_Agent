@@ -13,6 +13,33 @@ def test_chinese_agent_intents_are_routed() -> None:
     assert "generate_questions" in infer_actions("根据资料生成练习题")
 
 
+def test_code_and_diagram_requests_stay_in_the_conversational_lane() -> None:
+    code_request = "\u8bf7\u4e3a\u4e8c\u5206\u67e5\u627e\u5199 Python \u51fd\u6570\uff0c\u4e0d\u8981\u521b\u5efa\u5b66\u4e60\u8ba1\u5212\u3002"
+    diagram_request = "\u8bf7\u753b\u4e00\u4e2a React \u72b6\u6001\u6d41\u8f6c\u7684 Mermaid \u6d41\u7a0b\u56fe\u3002"
+    assert infer_actions(code_request) == ["chat"]
+    assert infer_actions(diagram_request) == ["chat"]
+    assert not _requests_web_search(code_request)
+
+
+def test_plain_chat_does_not_queue_a_redundant_background_agent_job(tmp_path, monkeypatch) -> None:
+    database = Database(f"sqlite:///{(tmp_path / 'agent-chat.db').as_posix()}")
+    database.create_schema()
+    monkeypatch.setattr("server.agent_stream.create_chat_model", lambda *_args, **_kwargs: None)
+    with database.session() as db:
+        from app.models import AgentSession
+        session = AgentSession(tenant_id="tenant-a", title="New session")
+        db.add(session)
+        db.flush()
+        session_id = session.id
+    events = list(__import__("server.agent_stream", fromlist=["stream_agent_reply"]).stream_agent_reply(
+        session_factory=database.session, tenant_id="tenant-a", user_id="user-a",
+        session_id=session_id, message="explain binary search", course_id=None,
+    ))
+    with database.session() as db:
+        assert db.query(__import__("app.models", fromlist=["BackgroundJob"]).BackgroundJob).count() == 0
+    assert any("Selected: chat" in event for event in events)
+
+
 def test_rich_blocks_turn_chinese_exam_style_questions_into_clickable_quiz_data() -> None:
     blocks = rich_response_blocks(
         "**第2题（句子听辨）**\n你听到一句话，这句话最可能出现什么场景？\n"

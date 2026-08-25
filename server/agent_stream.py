@@ -14,7 +14,7 @@ from app.agent_runtime import AgentRuntime, AgentTurn, SubAgentRuntime, SubAgent
 from app.models import AgentHandoff, AgentMemory, AgentMessage, AgentSession, AgentToolCall, BackgroundJob, Course, KnowledgePoint, Question, QuestionAttempt, ReviewItem, StudyGoal, StudySession, StudyTask
 from server.config import get_server_settings
 from server.storage import S3ObjectStorage
-from server.ai_services.agent import infer_actions
+from server.ai_services.agent import infer_actions, is_general_creation_request
 from server.agent_tools import WebAgentToolExecutor
 from server.tenant_session import set_session_tenant
 
@@ -632,7 +632,7 @@ def stream_agent_reply(*, session_factory, tenant_id: str, user_id: str, session
     # A request to write a recurring/daily plan with exercises is one atomic
     # learning launch. Keyword routing used to see only “练习题” and queue a
     # question job, leaving the learner without the requested daily tasks.
-    learning_launch_requested = _is_learning_launch_request(message)
+    learning_launch_requested = _is_learning_launch_request(message) and not is_general_creation_request(message)
     if learning_launch_requested:
         actions = ["generate_plan", "generate_questions"]
     confirmation_words = {"\u786e\u5b9a", "\u5f00\u59cb", "\u6267\u884c", "\u540c\u610f", "yes", "confirm", "start"}
@@ -777,6 +777,12 @@ def stream_agent_reply(*, session_factory, tenant_id: str, user_id: str, session
             human_input = _human_input_request(model, message=message, web_results=web_results)
             if human_input is not None:
                 yield _event("human_input", human_input)
+            direct_creation = is_general_creation_request(message)
+            direct_creation_instruction = (
+                "This is a direct code or diagram request. Produce the requested runnable code or complete Mermaid diagram now. "
+                "Do not refuse because no matching course or resource exists, do not discuss unrelated workspace data, and do not ask for confirmation.\n"
+                if direct_creation else ""
+            )
             prompt = (
                 f"You are a Chinese learning agent. Today is {date.today().isoformat()}. Respond naturally in Chinese. "
                 "Never describe an older exam notice as current; state its year and say when a date is historical or unverified. "
@@ -785,6 +791,7 @@ def stream_agent_reply(*, session_factory, tenant_id: str, user_id: str, session
                 "Do not claim that a queued tool action is completed. "
                 "When web search results are provided, summarize only those results. Explain that the resource-research sub-agent has already searched and checked candidates, and the learner can use the visible one-click confirmation to download a selected item into the course library.\n"
                 "For an exam or deadline, use the retrieved public sources to state the current schedule before proposing the plan; do not ask the learner for a date that the sources answer.\n"
+                f"{direct_creation_instruction}"
                 f"Planned actions: {', '.join(actions)}.\nWorkspace snapshot: {json.dumps(snapshot, ensure_ascii=False)}\n"
                 f"Web search results: {json.dumps(web_results, ensure_ascii=False)}\n"
                 + ("The interface has already shown a clear confirmation card for creating the plan. Do not write the full plan or unrelated exam schedule in chat; reply in at most two concise sentences explaining what will be created after confirmation.\n" if learning_launch_requested and not pending_request else "")
@@ -836,7 +843,7 @@ def stream_agent_reply(*, session_factory, tenant_id: str, user_id: str, session
         # A learning launch is executed only by its explicit confirmation card.
         # Do not queue the generic Agent worker in parallel: it can generate
         # questions alone and incorrectly report that approved actions ran.
-        if not already_started and not learning_launch_requested and not pending_request and not (
+        if actions != ["chat"] and not already_started and not learning_launch_requested and not pending_request and not (
             "generate_plan" in actions and "generate_questions" in actions
         ):
             job = BackgroundJob(tenant_id=tenant_id, requested_by=user_id, job_type="learning_agent", status="queued", payload=json.dumps({"tenant_id": tenant_id, "data": {"message": message, "course_id": course_id}}, ensure_ascii=False), detail="queued by streaming agent")
@@ -923,6 +930,10 @@ def _learning_launch_target_date(message: str) -> date:
 def _requests_web_search(message: str) -> bool:
     """Use public search for explicit research requests and changing facts."""
     value = message.casefold()
+    if is_general_creation_request(message) and not any(term in value for term in (
+        "\u8054\u7f51", "\u641c\u7d22", "web search", "search the web",
+    )):
+        return False
     if any(term in value for term in _TIME_SENSITIVE_SEARCH_TERMS) and any(term in value for term in _SCHEDULE_QUERY_TERMS):
         return True
     return any(term in value for term in (
