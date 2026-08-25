@@ -156,6 +156,30 @@ def main() -> int:
             "weekly_minutes": 90, "question_count": 2, "vocabulary_count": 2,
         },
     )
+    auto_course_request = "制定未来 7 天每日任务，围绕极限的定义安排练习。"
+    auto_session = call(args.base_url, "/v1/agent/sessions", token=token, method="POST", payload={
+        "title": "Smoke automatic course",
+    })
+    auto_launch = call(
+        args.base_url, f"/v1/agent/sessions/{auto_session['id']}/learning-launch",
+        token=token, method="POST", payload={
+            "title": "Smoke automatic calculus plan", "request": auto_course_request,
+            "target_date": (date.today() + timedelta(days=6)).isoformat(),
+            "weekly_minutes": 90, "question_count": 2, "vocabulary_count": 2,
+        },
+    )
+    repeat_session = call(args.base_url, "/v1/agent/sessions", token=token, method="POST", payload={
+        "title": "Smoke automatic course repeat",
+    })
+    repeat_auto_launch = call(
+        args.base_url, f"/v1/agent/sessions/{repeat_session['id']}/learning-launch",
+        token=token, method="POST", payload={
+            "title": "Smoke automatic calculus plan repeat", "request": auto_course_request,
+            "target_date": (date.today() + timedelta(days=6)).isoformat(),
+            "weekly_minutes": 90, "question_count": 2, "vocabulary_count": 2,
+        },
+    )
+    auto_course_workspace = call(args.base_url, f"/v1/courses/{auto_launch['course_id']}/workspace", token=token)
     agent_tools = call(args.base_url, "/v1/agent/tools", token=token)
     agent_search = call(args.base_url, "/v1/agent/tools/search?q=learning", token=token)
     memory = call(args.base_url, "/v1/agent/memories", token=token, method="POST", payload={
@@ -207,6 +231,10 @@ def main() -> int:
         raise RuntimeError("Agent compatibility endpoints did not return capability metadata")
     if learning_launch.get("status") != "queued" or not learning_launch.get("plan_job_id") or not learning_launch.get("goal_id"):
         raise RuntimeError("Agent learning launch did not create a queued adaptive plan")
+    if (not auto_launch.get("course_created") or repeat_auto_launch.get("course_created")
+            or auto_launch.get("course_id") != repeat_auto_launch.get("course_id")
+            or auto_course_workspace.get("course", {}).get("name") != "高等数学：极限的定义"):
+        raise RuntimeError("automatic AI course creation did not derive and reuse the learning-topic course")
     if not memories or memories[0].get("id") != memory["id"]:
         raise RuntimeError("Agent Memory compatibility endpoint did not persist the confirmed memory")
     print(json.dumps({
@@ -216,6 +244,7 @@ def main() -> int:
         "rag_job_id": rag_job["job_id"], "ai_job_id": ai_job["job_id"],
         "resource_question_job_id": resource_question_job["job_id"],
         "agent_session_id": agent_session["id"],
+        "auto_course_id": auto_launch["course_id"],
     }, ensure_ascii=False))
     return 0
 
