@@ -663,12 +663,12 @@ def stream_agent_reply(*, session_factory, tenant_id: str, user_id: str, session
                 set_session_tenant(state_db, tenant_id)
                 state_db.add(AgentHandoff(session_id=session_id, kind="learning_pending", payload_json=json.dumps({
                     "status": "pending", "request": request, "course_id": course_id,
-                    "title": request[:120], "target_date": (date.today() + timedelta(days=30)).isoformat(),
+                    "title": request[:120], "target_date": _learning_launch_target_date(request).isoformat(),
                 }, ensure_ascii=False)))
                 state_db.commit()
         yield _event("learning_launch", {
             "course_id": course_id, "request": request,
-            "title": request[:120], "target_date": (date.today() + timedelta(days=30)).isoformat(),
+            "title": request[:120], "target_date": _learning_launch_target_date(request).isoformat(),
             "weekly_minutes": 420, "question_count": 5, "auto_confirm": bool(pending_request),
         })
         if pending_request:
@@ -908,9 +908,18 @@ def _is_learning_launch_request(message: str) -> bool:
     """Recognize a request to create daily work, rather than merely discuss it."""
     value = message.casefold()
     wants_tasks = any(term in value for term in ("生成任务", "创建任务", "写入工作区", "固定任务", "每日任务", "细化到每天", "安排每天"))
-    wants_plan = any(term in value for term in ("学习计划", "备考计划", "制定计划", "每周", "每天"))
+    # Learners naturally say "制定七天每日任务" without repeating the word
+    # "计划".  Once a request also names daily tasks, that is still a durable
+    # learning launch and must stop at the visible confirmation card.
+    wants_plan = any(term in value for term in ("学习计划", "备考计划", "制定计划", "制定", "每周", "每天"))
     wants_exercises = any(term in value for term in ("练习题", "配练习", "每项任务"))
     return wants_tasks and (wants_plan or wants_exercises)
+
+
+def _learning_launch_target_date(message: str) -> date:
+    """Honor an explicit number of requested daily tasks."""
+    match = re.search(r"(?:未来|接下来)?\s*(\d{1,3})\s*天", message)
+    return date.today() + timedelta(days=max(1, min(int(match.group(1)), 365)) - 1) if match else date.today() + timedelta(days=30)
 def _requests_web_search(message: str) -> bool:
     """Use public search for explicit research requests and changing facts."""
     value = message.casefold()

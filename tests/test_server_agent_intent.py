@@ -3,7 +3,7 @@ from datetime import date
 from server.ai_services.agent import infer_actions, plan_actions, run_learning_agent
 from app.database import Database
 from app.models import AgentMemory, AgentMessage, Course, KnowledgePoint, Question, ReviewItem, StudyTask
-from server.agent_stream import _bounded_session_history, _collect_runtime_context, _is_learning_launch_request, _memory_candidate, _requested_artifact, _requests_web_search, _should_use_parallel_subagents, learning_snapshot, rich_response_blocks
+from server.agent_stream import _bounded_session_history, _collect_runtime_context, _is_learning_launch_request, _learning_launch_target_date, _memory_candidate, _requested_artifact, _requests_web_search, _should_use_parallel_subagents, learning_snapshot, rich_response_blocks
 
 
 def test_chinese_agent_intents_are_routed() -> None:
@@ -95,7 +95,12 @@ def test_stream_agent_detects_web_memory_and_explicit_artifacts() -> None:
 
 def test_daily_task_request_is_a_single_learning_launch_not_question_only() -> None:
     assert _is_learning_launch_request("请直接生成六级备考的具体任务，每周固定任务，细化到每天，并为每项任务配练习题")
+    assert _is_learning_launch_request("制定未来 7 天每日任务，围绕极限的定义安排练习，并生成 3 道题目")
     assert not _is_learning_launch_request("给我生成五道英语练习题")
+
+
+def test_learning_launch_honors_explicit_day_count() -> None:
+    assert (_learning_launch_target_date("制定未来 7 天每日任务") - date.today()).days == 6
     assert not _requests_web_search("请生成六级备考的每日学习任务")
     assert _requests_web_search("六级什么时候考试")
 
