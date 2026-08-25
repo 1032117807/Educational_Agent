@@ -2289,7 +2289,6 @@ def queue_ai_feature_job(payload: AiFeatureRequest, context: CurrentContext, db:
     if payload.resource_ids and payload.course_id is None:
         raise HTTPException(status_code=422, detail="course_id is required when resource_ids are provided")
     course_id = payload.course_id
-    course_created = False
     if course_id is not None and db.scalar(select(Course.id).where(Course.id == course_id, Course.tenant_id == context.tenant_id)) is None:
         raise HTTPException(status_code=404, detail="course not found")
     resource_ids = list(dict.fromkeys(payload.resource_ids))
@@ -2300,10 +2299,6 @@ def queue_ai_feature_job(payload: AiFeatureRequest, context: CurrentContext, db:
         )) or 0
         if resource_count != len(resource_ids):
             raise HTTPException(status_code=404, detail="one or more resources not found in course")
-    if False and course_id is None:
-        course_name = payload.title.strip()[:120] or payload.request.strip()[:120] or "AI 学习课程"
-        course = Course(tenant_id=context.tenant_id, name=course_name, subject="AI 自动创建", description=payload.request[:10000])
-        db.add(course); db.flush(); course_id = course.id; course_created = True
     data = payload.model_dump(mode="json")
     data.pop("feature")
     data["resource_ids"] = resource_ids
@@ -2375,9 +2370,17 @@ def launch_learning_loop(session_id: int, payload: LearningLaunchRequest, contex
     if course_id is not None and db.scalar(select(Course.id).where(Course.id == course_id, Course.tenant_id == context.tenant_id)) is None:
         raise HTTPException(status_code=404, detail="course not found")
     if course_id is None:
-        course = Course(tenant_id=context.tenant_id, name=_course_title_from_request(payload.request),
-                        subject="AI 自动创建", description=payload.request[:10000])
-        db.add(course); db.flush(); course_id = course.id; course_created = True
+        course_name = _course_title_from_request(payload.request)
+        course = db.scalar(select(Course).where(
+            Course.tenant_id == context.tenant_id,
+            Course.name == course_name,
+            Course.subject == "AI 自动创建",
+        ).order_by(Course.id.desc()))
+        if course is None:
+            course = Course(tenant_id=context.tenant_id, name=course_name,
+                            subject="AI 自动创建", description=payload.request[:10000])
+            db.add(course); db.flush(); course_created = True
+        course_id = course.id
     target = payload.target_date or (date.today() + timedelta(days=30))
     if target < date.today():
         raise HTTPException(status_code=422, detail="target_date cannot be in the past")

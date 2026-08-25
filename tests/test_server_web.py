@@ -72,6 +72,8 @@ def test_web_client_assets_and_mount_are_present() -> None:
     assert "course_id: courseId" in runtime
     router_source = Path("server/routers.py").read_text(encoding="utf-8")
     assert '"course_id": course_id, "started_at"' in router_source
+    assert 'Course.name == course_name' in router_source
+    assert 'if False and course_id is None' not in router_source
     assert 'src="/web/mathjax-config.js"' in page
     assert "<script>" not in page
 
