@@ -193,7 +193,7 @@ def test_daily_task_request_is_a_single_learning_launch_not_question_only() -> N
     assert not _is_learning_launch_request("给我生成五道英语练习题")
 
 
-def test_full_exam_plan_request_creates_a_confirmed_learning_launch_and_clear_course_name() -> None:
+def test_full_exam_plan_request_creates_an_automatic_learning_launch_and_clear_course_name() -> None:
     request = "我要参加今年12月份的英语6级，目标425分以上，帮我制定学习计划和检索下载相关资料、题目与单词。"
     assert _is_learning_launch_request(request)
     assert _course_title_from_request(request) == "大学英语六级：备考"

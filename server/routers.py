@@ -131,7 +131,8 @@ class RefreshRequest(BaseModel):
 
 class AgentResourceImportRequest(BaseModel):
     url: str = Field(min_length=12, max_length=2000)
-    course_id: int = Field(gt=0)
+    course_id: int | None = Field(default=None, gt=0)
+    request: str = Field(default="", max_length=4000)
     confirmed: bool = False
 
 class WebCodingRunRequest(BaseModel):
@@ -2189,11 +2190,23 @@ def list_resources(context: CurrentContext, db: DbSession, course_id: int | None
 def import_agent_resource_url(
     session_id: int, payload: AgentResourceImportRequest, context: CurrentContext, db: DbSession,
 ) -> dict[str, object]:
-    """Download an explicitly approved public search result into a course library."""
-    if not payload.confirmed:
-        raise HTTPException(status_code=409, detail="explicit confirmation is required")
-    if db.scalar(select(Course.id).where(Course.id == payload.course_id, Course.tenant_id == context.tenant_id)) is None:
+    """Import a public learning file, creating a course from the request when needed."""
+    course_id = payload.course_id
+    course_created = False
+    if course_id is not None and db.scalar(select(Course.id).where(Course.id == course_id, Course.tenant_id == context.tenant_id)) is None:
         raise HTTPException(status_code=404, detail="course not found")
+    if course_id is None:
+        course_name = _course_title_from_request(payload.request or payload.url)
+        course = db.scalar(select(Course).where(
+            Course.tenant_id == context.tenant_id,
+            Course.name == course_name,
+            Course.subject == "AI 自动创建",
+        ).order_by(Course.id.desc()))
+        if course is None:
+            course = Course(tenant_id=context.tenant_id, name=course_name,
+                            subject="AI 自动创建", description=(payload.request or payload.url)[:10000])
+            db.add(course); db.flush(); course_created = True
+        course_id = course.id
     try:
         with tempfile.TemporaryDirectory(prefix="learning-agent-import-") as folder:
             target = Path(folder) / "agent-resource"
@@ -2212,14 +2225,15 @@ def import_agent_resource_url(
             ResourceFile.trashed.is_(False),
         ))
         if duplicate is not None:
-            return {"resource_id": duplicate, "status": "already_exists"}
+            return {"resource_id": duplicate, "course_id": course_id,
+                    "course_created": course_created, "status": "already_exists"}
         filename = source.name.replace("agent-resource", "downloaded-resource")
         key = resource_key(tenant_id=context.tenant_id, resource_id=str(uuid4()), filename=filename)
         S3ObjectStorage(settings).put(key=key, stream=BytesIO(content), content_type="application/octet-stream")
         resource = ResourceFile(
             tenant_id=context.tenant_id, name=filename, original_name=filename,
             source_path=payload.url.strip(), relative_path=key, sha256=digest,
-            size=len(content), course_id=payload.course_id,
+            size=len(content), course_id=course_id,
         )
         job = BackgroundJob(
             tenant_id=context.tenant_id, requested_by=context.user_id,
@@ -2232,11 +2246,12 @@ def import_agent_resource_url(
         ).order_by(AgentHandoff.id.desc()))
         pending_payload = json.loads(pending.payload_json or "{}") if pending is not None else {}
         follow_up = None
-        if pending_payload.get("status") == "completed" and int(pending_payload.get("course_id") or 0) == payload.course_id:
+        if pending_payload.get("status") == "completed" and int(pending_payload.get("course_id") or 0) == course_id:
             follow_up = {"request": str(pending_payload.get("request") or "根据课程资料生成练习题"), "goal_id": pending_payload.get("goal_id"), "session_id": session_id, "vocabulary_count": pending_payload.get("vocabulary_count", 10)}
         job.payload = json.dumps({"resource_id": resource.id, "tenant_id": context.tenant_id, "question_follow_up": follow_up}, ensure_ascii=False)
         db.commit()
-        return {"resource_id": resource.id, "job_id": job.id, "status": "queued", "filename": filename}
+        return {"resource_id": resource.id, "job_id": job.id, "course_id": course_id,
+                "course_created": course_created, "status": "queued", "filename": filename}
     except HTTPException:
         raise
     except Exception as exc:

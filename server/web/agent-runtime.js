@@ -106,10 +106,11 @@
       const importButton = document.createElement('button'); importButton.type = 'button'; importButton.className = 'secondary agent-import-source'; importButton.textContent = '导入资料（自动解析 PDF）';
       importButton.onclick = async () => {
         const course = document.querySelector('#agent-course')?.value || state.activeCourseId;
-        if (!course) { flash('请先从“我的课程”打开一门课程，再导入资料'); return; }
+        const userMessages = document.querySelectorAll('.agent-message.user div');
+        const learningRequest = userMessages.length ? userMessages[userMessages.length - 1].textContent : '';
         importButton.disabled = true; importButton.textContent = '资料检索子 Agent 正在下载并建立索引...';
         try {
-          const result = await request(`/agent/sessions/${state.agentSessionId}/resources/import-url`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: item.url, course_id: Number(course), confirmed: true }) });
+          const result = await request(`/agent/sessions/${state.agentSessionId}/resources/import-url`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: item.url, course_id: course ? Number(course) : null, request: learningRequest }) });
           appendAgentEvent(`资料检索子 Agent 已将资料存入课程知识库，资源 #${result.resource_id} 正在建立索引。`);
           importButton.textContent = '已提交索引';
         } catch (error) { importButton.disabled = false; importButton.textContent = '导入资料（自动解析 PDF）'; appendAgentEvent(`资料检索 Agent 未能从“${item.title || '该来源'}”找到可导入的学习文件；该链接已保留为参考页面，不会进入课程索引。`); }
@@ -147,15 +148,19 @@
   };
 
   const autoImportMaterials = async payload => {
-    const courseId = Number(payload?.course_id || document.querySelector('#agent-course')?.value || state.activeCourseId || 0);
+    let courseId = Number(payload?.course_id || document.querySelector('#agent-course')?.value || state.activeCourseId || 0);
     const items = Array.isArray(payload?.items) ? payload.items : [];
-    if (!courseId || !state.agentSessionId || !items.length) return;
+    if (!state.agentSessionId || !items.length) return;
+    const userMessages = document.querySelectorAll('.agent-message.user div');
+    const learningRequest = userMessages.length ? userMessages[userMessages.length - 1].textContent : '';
     setLearningWorkflowStatus('正在导入资料', `资料检索 Agent 正在处理 ${items.length} 个候选来源。`);
-    appendAgentEvent(`资料检索 Agent 已按你的授权开始自动下载 ${items.length} 份学习文件，并关联到当前课程。`);
+    appendAgentEvent(`资料检索 Agent 正在自动下载 ${items.length} 份学习文件，并关联到匹配课程；没有匹配课程时会新建课程。`);
     let imported = 0;
     for (const item of items) {
       try {
-        const result = await request(`/agent/sessions/${state.agentSessionId}/resources/import-url`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: item.url, course_id: courseId, confirmed: true }) });
+        const result = await request(`/agent/sessions/${state.agentSessionId}/resources/import-url`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: item.url, course_id: courseId || null, request: learningRequest }) });
+        courseId = Number(result.course_id || courseId);
+        if (result.course_created) appendAgentEvent('已根据学习主题创建课程，并开始为资料建立索引。');
         appendAgentEvent(`已下载并排队索引：${item.title || item.url}（资源 #${result.resource_id}）。`);
         imported += 1;
         setLearningWorkflowStatus('正在建立索引', '资料已导入课程知识库。索引完成后会自动生成题目和每日任务，并在这里显示最终结果。');
@@ -337,26 +342,26 @@
     root.querySelectorAll('.agent-generic-confirmation').forEach(item => item.remove());
     const card = document.createElement('article');
     card.className = 'agent-message assistant agent-confirmation agent-learning-launch';
-    card.innerHTML = `<strong>已识别为“创建学习任务”</strong><div>确认后会写入课程目标和每日任务；任务生成完成后会显示数量。练习题会作为独立任务生成，不会替代学习任务。</div><button type="button" class="primary">确认并写入任务</button>`;
+    card.innerHTML = `<strong>已识别为“创建学习任务”</strong><div>正在自动匹配或创建课程，写入学习目标并导入、索引资料。练习题会作为独立任务生成，不会替代学习任务。</div><button type="button" class="primary">正在启动</button>`;
     const button = card.querySelector('button');
     if (payload.status === 'completed') {
       card.querySelector('div').textContent = '已确认完成。学习目标和后续任务已开始创建；运行状态会显示在下方“Agent 运行过程”。';
-      button.textContent = '确认完成';
+      button.textContent = '已启动';
       button.disabled = true;
       root.appendChild(card); root.scrollTop = root.scrollHeight;
       return;
     }
     const selectedCourseId = () => Number(course?.value || payload.course_id || state.activeCourseId || 0);
-    if (!selectedCourseId()) card.querySelector('div').textContent = '未选择课程：确认后会按学习主题创建一门新课程，再写入目标和任务。';
-    if (restored) card.querySelector('div').textContent = '此学习任务正在等待你的确认。确认后才会写入课程目标和每日任务。';
+    if (!selectedCourseId()) card.querySelector('div').textContent = '未选择课程：系统会按学习主题匹配已有课程；没有匹配项时自动创建课程。';
+    if (restored) card.querySelector('div').textContent = '正在恢复自动学习流程。';
     button.onclick = async () => {
-      button.disabled = true; button.textContent = '正在确认...';
+      button.disabled = true; button.textContent = '正在启动...';
       try {
         const courseId = selectedCourseId();
         const result = await request(`/agent/sessions/${state.agentSessionId}/learning-launch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: payload.title || payload.request.slice(0, 120), request: payload.request, course_id: courseId || null, target_date: payload.target_date, weekly_minutes: payload.weekly_minutes || 420, question_count: payload.question_count || 5, vocabulary_count: 10 }) });
         const steps = (result.workflow_steps || []).map(step => `${step.agent}：${step.detail || step.status}`).join('；');
         card.querySelector('div').textContent = `目标已创建。${steps || `任务编排 Agent 正在生成每日任务。计划任务 #${result.plan_job_id || '—'}。`} ${result.question_job_id ? `出题任务 #${result.question_job_id} 已排队。` : '出题 Agent 会在资料检索并入库后，依据已索引资料出题。'} 运行状态会显示在下方“Agent 运行过程”。`;
-        button.textContent = '确认完成';
+        button.textContent = '已启动';
         if (Array.isArray(result.source_items) && result.source_items.length) {
           await autoImportMaterials({ course_id: result.course_id, items: result.source_items });
         }
@@ -366,8 +371,7 @@
       } catch (error) { button.disabled = false; button.textContent = '重试'; card.querySelector('div').textContent = `启动失败：${error.message}`; }
     };
     root.appendChild(card); root.scrollTop = root.scrollHeight;
-    // A learner must always press this visible confirmation button.  Never
-    // turn a chat reply or a restored session into an implicit confirmation.
+    setTimeout(() => button.click(), 0);
   };
   window.restoreLearningLaunch = payload => appendLearningLaunch(payload, true);
 
