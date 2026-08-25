@@ -11,7 +11,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AICitation, AIRun, KnowledgePoint, QuestionDraft, QuestionDraftCitation
+from app.models import AICitation, AIRun, BackgroundJob, KnowledgePoint, Question, QuestionDraft, QuestionDraftCitation
 from server.rag_retriever import TenantPgVectorRetriever
 from ai.gateways.rerank import Reranker
 from server.tenant_session import set_session_tenant
@@ -168,6 +168,8 @@ def generate_grounded_questions(
         for number, hit in enumerate(hits, start=1):
             session.add(AICitation(tenant_id=tenant_id, ai_run_id=run.id, chunk_id=hit.chunk_id, citation_number=number, quote_text=hit.content[:1000], relevance_score=hit.rrf_score))
         draft_ids = []
+        question_ids = []
+        auto_accept = bool(payload.get("auto_accept", False))
         knowledge_points = session.scalars(select(KnowledgePoint).where(
             KnowledgePoint.tenant_id == tenant_id, KnowledgePoint.course_id == course_id,
         ).order_by(KnowledgePoint.importance.desc(), KnowledgePoint.id)).all()
@@ -176,6 +178,15 @@ def generate_grounded_questions(
                           if candidate.name.casefold() in item["prompt"].casefold()), None)
             if point is None and knowledge_points:
                 point = knowledge_points[len(draft_ids) % len(knowledge_points)]
+            if auto_accept:
+                question = Question(
+                    tenant_id=tenant_id, course_id=course_id, knowledge_point_id=point.id if point else None,
+                    kind=item["kind"], prompt=item["prompt"], answer=item["answer"], explanation=item["explanation"],
+                    options="\n".join(json.loads(item["options"])) if item["options"] else "", tags=item["tags"],
+                    difficulty=item["difficulty"], source="ai",
+                )
+                session.add(question); session.flush(); question_ids.append(question.id)
+                continue
             draft = QuestionDraft(
                 tenant_id=tenant_id, ai_run_id=run.id, course_id=course_id,
                 knowledge_point_id=point.id if point else None,
@@ -193,8 +204,19 @@ def generate_grounded_questions(
                     question_draft_id=draft.id, chunk_id=hit.chunk_id,
                     citation_number=citation_number, quote_text=hit.content[:1000],
                 ))
-        run.output_json = json.dumps({"count": len(draft_ids), "question_draft_ids": draft_ids, "evidence_count": len(hits)}, ensure_ascii=False)
+        plan_job_id = None
+        goal_id = payload.get("goal_id")
+        if auto_accept and question_ids and goal_id:
+            plan_job = BackgroundJob(
+                tenant_id=tenant_id, job_type="ai_feature", status="queued",
+                payload=json.dumps({"tenant_id": tenant_id, "feature": "learning_plan", "data": {
+                    "goal_id": int(goal_id), "course_id": course_id,
+                    "request": str(payload.get("request") or "根据已索引课程资料安排每日学习任务"),
+                }}, ensure_ascii=False), detail="queued after grounded questions became available",
+            )
+            session.add(plan_job); session.flush(); plan_job_id = plan_job.id
+        run.output_json = json.dumps({"count": len(question_ids) if auto_accept else len(draft_ids), "question_draft_ids": draft_ids, "question_ids": question_ids, "evidence_count": len(hits)}, ensure_ascii=False)
         session.commit()
-        return {"ai_run_id": run.id, "question_draft_ids": draft_ids, "count": len(draft_ids),
-                "evidence_count": len(hits), "practice_session_id": None,
-                "review_required": True}
+        return {"ai_run_id": run.id, "question_draft_ids": draft_ids, "question_ids": question_ids, "count": len(question_ids) if auto_accept else len(draft_ids),
+                "evidence_count": len(hits), "practice_session_id": None, "plan_job_id": plan_job_id,
+                "review_required": not auto_accept}

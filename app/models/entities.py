@@ -62,6 +62,19 @@ class StudyTask(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class TaskAssignment(Base):
+    """Learner-facing material deliberately assigned to one study task."""
+    __tablename__ = "task_assignments"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("study_tasks.id"), index=True)
+    knowledge_point_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_points.id"), nullable=True, index=True)
+    question_id: Mapped[int | None] = mapped_column(ForeignKey("questions.id"), nullable=True, index=True)
+    review_item_id: Mapped[int | None] = mapped_column(ForeignKey("review_items.id"), nullable=True, index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 class Question(Base):
     __tablename__ = "questions"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -147,6 +160,7 @@ class PracticeSession(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id"), nullable=True)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("study_tasks.id"), nullable=True, index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     total: Mapped[int] = mapped_column(Integer, default=0)

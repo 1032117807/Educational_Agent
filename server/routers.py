@@ -42,6 +42,7 @@ from app.models import (
     StudyGoal,
     StudySession,
     StudyTask,
+    TaskAssignment,
     User,
 )
 from server.config import get_server_settings
@@ -292,7 +293,7 @@ def _course_title_from_request(request: str) -> str:
     if explicit:
         return explicit.group(1).strip()
 
-    if re.search(r"\b(?:cet[- ]?6|大学英语六级)\b", text, re.IGNORECASE):
+    if re.search(r"(?:\bcet[- ]?6\b|大学英语六级|英语\s*6\s*级|英语六级)", text, re.IGNORECASE):
         focus = "听力与阅读" if "听力" in text and "阅读" in text else "备考"
         return f"大学英语六级：{focus}"
 
@@ -1007,6 +1008,29 @@ def _serialize_task(task: StudyTask, task_context: dict[str, dict[int, object]])
     }
 
 
+def _task_assignments(db: DbSession, tenant_id: str, task_id: int) -> list[TaskAssignment]:
+    return db.scalars(select(TaskAssignment).where(
+        TaskAssignment.tenant_id == tenant_id, TaskAssignment.task_id == task_id,
+    ).order_by(TaskAssignment.position, TaskAssignment.id)).all()
+
+
+def _task_learning_payload(db: DbSession, context: CurrentContext, task: StudyTask) -> dict[str, object]:
+    assignments = _task_assignments(db, context.tenant_id, task.id)
+    point_ids = [item.knowledge_point_id for item in assignments if item.knowledge_point_id]
+    question_ids = [item.question_id for item in assignments if item.question_id]
+    review_ids = [item.review_item_id for item in assignments if item.review_item_id]
+    points = db.scalars(select(KnowledgePoint).where(KnowledgePoint.tenant_id == context.tenant_id, KnowledgePoint.id.in_(point_ids))).all() if point_ids else []
+    questions = db.scalars(select(Question).where(Question.tenant_id == context.tenant_id, Question.id.in_(question_ids), Question.archived.is_(False))).all() if question_ids else []
+    reviews = db.scalars(select(ReviewItem).where(ReviewItem.tenant_id == context.tenant_id, ReviewItem.id.in_(review_ids))).all() if review_ids else []
+    point_map, question_map, review_map = ({item.id: item for item in points}, {item.id: item for item in questions}, {item.id: item for item in reviews})
+    return {
+        "knowledge": [{"id": item.id, "name": item.name, "definition": item.definition, "formula": item.formula, "note": item.note, "mastery": item.mastery} for item in (point_map[point_id] for point_id in point_ids if point_id in point_map)],
+        "questions": [{"id": item.id, "prompt": item.prompt, "kind": item.kind, "options": item.options, "explanation": item.explanation, "difficulty": item.difficulty} for item in (question_map[question_id] for question_id in question_ids if question_id in question_map)],
+        "vocabulary": [{"id": item.id, "word": item.title, "meaning": item.note.split("\n", 1)[0], "example": item.note.split("\n", 1)[1] if "\n" in item.note else ""} for item in (review_map[review_id] for review_id in review_ids if review_id in review_map)],
+        "requires_practice": bool(question_ids),
+    }
+
+
 @router.get("/mistakes")
 def list_mistakes(context: CurrentContext, db: DbSession, course_id: int | None = None) -> list[dict[str, object]]:
     statement = select(ReviewItem, Question, KnowledgePoint).join(
@@ -1243,6 +1267,9 @@ def complete_task(task_id: int, context: CurrentContext, db: DbSession) -> dict[
     task = db.scalar(select(StudyTask).where(StudyTask.id == task_id, StudyTask.tenant_id == context.tenant_id))
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
+    learning = _task_learning_payload(db, context, task)
+    if learning["requires_practice"]:
+        raise HTTPException(status_code=409, detail="complete the assigned questions from this task before marking it complete")
     if not task.completed:
         task.completed = True
         task.status = "completed"
@@ -1266,6 +1293,8 @@ def act_on_task(task_id: int, payload: TaskActionRequest, context: CurrentContex
         task.started_at = task.started_at or datetime.now()
         event_type = "task_started"
     elif payload.action == "complete":
+        if _task_learning_payload(db, context, task)["requires_practice"]:
+            raise HTTPException(status_code=409, detail="complete the assigned questions from this task before marking it complete")
         task.completed = True
         task.status = "completed"
         task.completed_at = datetime.now()
@@ -1287,6 +1316,34 @@ def act_on_task(task_id: int, payload: TaskActionRequest, context: CurrentContex
     db.commit()
     return {"id": task.id, "action": payload.action, "planned_date": task.planned_date.isoformat(),
             "completed": task.completed, "status": task.status}
+
+
+@router.get("/tasks/{task_id}/learning")
+def get_task_learning(task_id: int, context: CurrentContext, db: DbSession) -> dict[str, object]:
+    task = db.scalar(select(StudyTask).where(StudyTask.id == task_id, StudyTask.tenant_id == context.tenant_id))
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return {"task_id": task.id, **_task_learning_payload(db, context, task)}
+
+
+@router.post("/tasks/{task_id}/practice", status_code=status.HTTP_201_CREATED)
+def start_task_practice(task_id: int, context: CurrentContext, db: DbSession) -> dict[str, object]:
+    task = db.scalar(select(StudyTask).where(StudyTask.id == task_id, StudyTask.tenant_id == context.tenant_id))
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    question_ids = [item.question_id for item in _task_assignments(db, context.tenant_id, task.id) if item.question_id]
+    if not question_ids:
+        raise HTTPException(status_code=409, detail="this task has no assigned questions yet")
+    running = db.scalar(select(PracticeSession).where(PracticeSession.tenant_id == context.tenant_id, PracticeSession.task_id == task.id, PracticeSession.status == "running"))
+    if running is not None:
+        return {"id": running.id, "task_id": task.id, "total": running.total, "status": running.status}
+    task.status = "in_progress"; task.started_at = task.started_at or datetime.now()
+    session = PracticeSession(tenant_id=context.tenant_id, course_id=task.course_id, task_id=task.id, total=len(question_ids))
+    db.add(session); db.flush()
+    db.add_all([PracticeSessionQuestion(tenant_id=context.tenant_id, session_id=session.id, question_id=question_id, position=position) for position, question_id in enumerate(question_ids, start=1)])
+    record_learning_event(db, context, "task_practice_started", course_id=task.course_id, task_id=task.id, payload={"practice_session_id": session.id, "question_count": len(question_ids)})
+    db.commit()
+    return {"id": session.id, "task_id": task.id, "total": session.total, "status": session.status}
 
 
 @router.get("/questions")
@@ -1864,6 +1921,19 @@ def complete_practice_session(session_id: int, context: CurrentContext, db: DbSe
                               next_review=date.today() + timedelta(days=1)))
         else:
             review.status = "reviewing"; review.wrong_count += 1; review.error_reason=("choice_mismatch" if question.kind in CHOICE_QUESTION_KINDS else "answer_mismatch"); review.ai_analysis = review.ai_analysis or question.explanation or "本题答案与标准答案不一致，建议先复习关联知识点后再练习。"; review.next_review = date.today() + timedelta(days=1)
+    task_result = None
+    if session.task_id is not None:
+        task = db.scalar(select(StudyTask).where(StudyTask.id == session.task_id, StudyTask.tenant_id == context.tenant_id))
+        answered_all = len({attempt.question_id for attempt in attempts}) >= session.total
+        accuracy = (session.correct / session.total) if session.total else 0.0
+        if task is not None and answered_all and accuracy >= 0.6:
+            task.completed = True; task.status = "completed"; task.completed_at = datetime.now()
+            record_learning_event(db, context, "task_completed_by_practice", course_id=task.course_id, task_id=task.id,
+                                  payload={"practice_session_id": session.id, "accuracy": round(accuracy * 100, 1)})
+            task_result = {"task_id": task.id, "completed": True, "accuracy": round(accuracy * 100, 1)}
+        elif task is not None:
+            task.status = "in_progress"
+            task_result = {"task_id": task.id, "completed": False, "accuracy": round(accuracy * 100, 1), "reason": "answer every assigned question and reach 60% accuracy"}
     record_audit(db, context, "practice_session.complete", "practice_session", str(session.id), {"correct": session.correct})
     record_learning_event(db, context, "study_completed", course_id=session.course_id,
                           payload={"practice_session_id": session.id, "total": session.total,
@@ -1880,7 +1950,7 @@ def complete_practice_session(session_id: int, context: CurrentContext, db: DbSe
     accuracy = round(session.correct * 100 / session.total, 1) if session.total else 0
     return {"id": session.id, "status": session.status, "total": session.total, "correct": session.correct,
             "accuracy": accuracy, "analysis_job_id": analysis_job.id,
-            "wrong_questions": wrong_questions, "knowledge_mastery": mastery_updates}
+            "wrong_questions": wrong_questions, "knowledge_mastery": mastery_updates, "task_result": task_result}
 
 
 @router.get("/reviews")
@@ -2134,7 +2204,7 @@ def import_agent_resource_url(
         pending_payload = json.loads(pending.payload_json or "{}") if pending is not None else {}
         follow_up = None
         if pending_payload.get("status") == "completed" and int(pending_payload.get("course_id") or 0) == payload.course_id:
-            follow_up = {"request": str(pending_payload.get("request") or "根据课程资料生成练习题"), "goal_id": pending_payload.get("goal_id"), "session_id": session_id}
+            follow_up = {"request": str(pending_payload.get("request") or "根据课程资料生成练习题"), "goal_id": pending_payload.get("goal_id"), "session_id": session_id, "vocabulary_count": pending_payload.get("vocabulary_count", 10)}
         job.payload = json.dumps({"resource_id": resource.id, "tenant_id": context.tenant_id, "question_follow_up": follow_up}, ensure_ascii=False)
         db.commit()
         return {"resource_id": resource.id, "job_id": job.id, "status": "queued", "filename": filename}
@@ -2404,6 +2474,7 @@ def launch_learning_loop(session_id: int, payload: LearningLaunchRequest, contex
     if pending is not None:
         stored = json.loads(pending.payload_json or "{}")
         stored["goal_id"] = goal.id
+        stored["vocabulary_count"] = payload.vocabulary_count
         pending.payload_json = json.dumps(stored, ensure_ascii=False)
     # Fixed workflow: the question agent may only run after the research agent
     # has brought relevant material into the indexed course library.
@@ -2413,9 +2484,11 @@ def launch_learning_loop(session_id: int, payload: LearningLaunchRequest, contex
     # Planning uses the learner's goal, task history and mastery snapshot. It
     # must not wait for a document upload; only generated questions require
     # indexed evidence.
-    plan_job = BackgroundJob(tenant_id=context.tenant_id, requested_by=context.user_id, job_type="ai_feature", status="queued",
-        payload=json.dumps({"tenant_id": context.tenant_id, "feature": "learning_plan", "data": {"goal_id": goal.id, "course_id": course_id, "request": payload.request}}, ensure_ascii=False), detail="queued by task-scheduling agent")
-    db.add(plan_job); db.flush()
+    plan_job = None
+    if indexed_evidence:
+        plan_job = BackgroundJob(tenant_id=context.tenant_id, requested_by=context.user_id, job_type="ai_feature", status="queued",
+            payload=json.dumps({"tenant_id": context.tenant_id, "feature": "learning_plan", "data": {"goal_id": goal.id, "course_id": course_id, "request": payload.request}}, ensure_ascii=False), detail="queued by task-scheduling agent")
+        db.add(plan_job); db.flush()
     question_job_id = None
     vocabulary_job_id = None
     if indexed_evidence:
@@ -2432,7 +2505,7 @@ def launch_learning_loop(session_id: int, payload: LearningLaunchRequest, contex
     return {"course_id": course_id, "course_created": course_created, "goal_id": goal.id, "plan_job_id": plan_job.id if plan_job else None, "question_job_id": question_job_id, "vocabulary_job_id": vocabulary_job_id, "source_items": source_items,
             "target_date": target.isoformat(), "status": "queued", "workflow_steps": [
                 {"agent": "资料检索 Agent", "status": "ready", "detail": "检索并筛选高相关学习资料；导入需你确认"},
-                {"agent": "任务编排 Agent", "status": "queued", "detail": "结合学习目标、任务历史和掌握度生成每日任务"},
+                {"agent": "任务编排 Agent", "status": "queued" if plan_job else "waiting_for_material", "detail": "资料索引并生成可直接作答的题目后，再生成每日任务"},
                 {"agent": "出题 Agent", "status": "queued" if question_job_id else "waiting_for_material", "detail": "依据已索引资料出题"},
             ]}
 

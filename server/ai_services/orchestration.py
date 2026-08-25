@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     AICitation, AIRun, BackgroundJob, Course, KnowledgePoint, KnowledgePointDraft,
-    KnowledgePointDraftCitation, Question, QuestionAttempt, StudyGoal, StudySession, StudyTask,
+    KnowledgePointDraftCitation, Question, QuestionAttempt, ReviewItem, StudyGoal, StudySession, StudyTask, TaskAssignment,
 )
 from server.rag_retriever import TenantPgVectorRetriever
 from ai.gateways.rerank import Reranker
@@ -33,6 +33,33 @@ _INTERNAL_TASK_TERMS = (
 
 def _is_internal_workflow_task(title: object) -> bool:
     return any(term in str(title or "").casefold() for term in _INTERNAL_TASK_TERMS)
+
+
+def _attach_learner_material(session: Session, tenant_id: str, course_id: int | None, tasks: list[StudyTask]) -> None:
+    """Attach real course content so a plan is learnable, not merely a checklist."""
+    if course_id is None or not tasks:
+        return
+    points = session.scalars(select(KnowledgePoint).where(KnowledgePoint.tenant_id == tenant_id, KnowledgePoint.course_id == course_id).order_by(KnowledgePoint.mastery, KnowledgePoint.id)).all()
+    questions = session.scalars(select(Question).where(Question.tenant_id == tenant_id, Question.course_id == course_id, Question.archived.is_(False)).order_by(Question.id)).all()
+    vocab = session.scalars(select(ReviewItem).where(ReviewItem.tenant_id == tenant_id, ReviewItem.source == "vocabulary", ReviewItem.status != "archived").order_by(ReviewItem.next_review, ReviewItem.id)).all()
+    question_cursor = vocabulary_cursor = 0
+    for index, task in enumerate(tasks):
+        if points:
+            point = points[index % len(points)]
+            task.knowledge_point_id = task.knowledge_point_id or point.id
+            session.add(TaskAssignment(tenant_id=tenant_id, task_id=task.id, knowledge_point_id=point.id, position=1))
+        title = task.title.casefold()
+        wants_questions = any(term in title for term in ("练习", "题", "测试", "模拟", "阅读", "听力", "翻译", "写作"))
+        if wants_questions and questions:
+            chosen = questions[question_cursor:question_cursor + 3] or questions[:3]
+            for position, question in enumerate(chosen, start=10):
+                session.add(TaskAssignment(tenant_id=tenant_id, task_id=task.id, question_id=question.id, position=position))
+            question_cursor = (question_cursor + len(chosen)) % len(questions)
+        if ("词汇" in title or "单词" in title) and vocab:
+            chosen_vocab = vocab[vocabulary_cursor:vocabulary_cursor + 10] or vocab[:10]
+            for position, item in enumerate(chosen_vocab, start=100):
+                session.add(TaskAssignment(tenant_id=tenant_id, task_id=task.id, review_item_id=item.id, position=position))
+            vocabulary_cursor = (vocabulary_cursor + len(chosen_vocab)) % len(vocab)
 
 
 def _json_object(content: object) -> dict[str, object]:
@@ -114,6 +141,7 @@ def run_ai_feature(*, payload: dict[str, object], session_factory: Callable[[], 
         response = chat_model.invoke(_prompt(feature, str(data.get("request", "")), context, _evidence(hits)))
         output = _json_object(response.content)
         created_tasks = 0
+        created_task_rows: list[StudyTask] = []
         if feature == "learning_plan":
             # A completed plan must become visible, actionable daily work.
             goal = session.scalar(select(StudyGoal).where(
@@ -148,17 +176,22 @@ def run_ai_feature(*, payload: dict[str, object], session_factory: Callable[[], 
                 week_key = (week.year, week.week)
                 if minutes_by_week.get(week_key, 0) + minutes > goal.weekly_minutes:
                     continue
-                session.add(StudyTask(
+                task = StudyTask(
                     tenant_id=tenant_id, course_id=goal.course_id,
                     title=str(item["title"]).strip()[:160], planned_date=planned_date,
                     duration_minutes=minutes, priority=str(item.get("priority", "medium"))[:20],
                     scheduled_time=str(item.get("scheduled_time", ""))[:5],
                     task_type=str(item.get("type", "study"))[:30],
                     note=str(item.get("reason", ""))[:10000], source="ai",
-                ))
+                )
+                session.add(task)
+                created_task_rows.append(task)
                 created_tasks += 1
                 existing.add(key)
                 minutes_by_week[week_key] = minutes_by_week.get(week_key, 0) + minutes
+        if created_task_rows:
+            session.flush()
+            _attach_learner_material(session, tenant_id, course_id, created_task_rows)
         citations = output.get("citations", [])
         extracted_drafts: list[tuple[dict[str, object], list[int]]] = []
         if needs_evidence:

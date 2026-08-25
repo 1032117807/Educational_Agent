@@ -16,6 +16,7 @@ from app.models.entities import (
     StudySession,
     StudyGoal,
     StudyTask,
+    TaskAssignment,
     TaskRecurrence,
     ToolCallLog,
 )
@@ -55,7 +56,7 @@ __all__ = [
     "AppSetting", "BackgroundJob", "Course", "KnowledgePoint", "PracticeSession", "PracticeSessionQuestion",
     "Question", "QuestionAttempt", "ResourceFile", "ReviewAttempt", "ReviewItem", "LearningEvent", "CourseNote",
     "KnowledgePointDraft", "KnowledgePointDraftCitation", "QuestionDraft",
-    "StudyGoal", "StudySession", "StudyTask", "TaskRecurrence", "ToolCallLog", "QuestionDraftCitation",
+    "StudyGoal", "StudySession", "StudyTask", "TaskAssignment", "TaskRecurrence", "ToolCallLog", "QuestionDraftCitation",
     "SubjectiveGradingCitation", "SubjectiveGradingResult", "ErrorAnalysisResult",
     "LearningPlanDraft", "LearningPlanDraftTask", "LearningReportSnapshot",
     "AdaptivePlanDraft", "AdaptivePlanDraftTask",

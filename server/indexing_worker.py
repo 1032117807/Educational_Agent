@@ -41,6 +41,7 @@ def index_resource_from_object_store(
         object_key = resource.relative_path
         filename = Path(resource.name).name
         course_id = resource.course_id
+        vocabulary_source = any(term in filename.casefold() for term in ("词汇", "单词", "vocabulary", "wordlist", "word-list"))
 
     with tempfile.TemporaryDirectory(prefix="learning-index-") as temporary:
         workspace = Path(temporary)
@@ -51,6 +52,7 @@ def index_resource_from_object_store(
             source_path_override=destination,
         )
     question_job_id = None
+    vocabulary_job_id = None
     plan_job_id = None
     follow_up = payload.get("question_follow_up")
     if isinstance(follow_up, dict):
@@ -64,25 +66,34 @@ def index_resource_from_object_store(
                     "tenant_id": tenant_id, "course_id": course_id,
                     "resource_ids": [resource_id], "request": str(follow_up.get("request") or "根据课程资料生成练习题"),
                     "count": 5, "difficulty": 3, "kinds": ["single_choice", "short_answer"],
-                    "auto_practice": True, "goal_id": follow_up.get("goal_id"), "agent_session_id": follow_up.get("session_id"),
+                    "auto_practice": True, "auto_accept": True, "goal_id": follow_up.get("goal_id"), "agent_session_id": follow_up.get("session_id"),
                 }, ensure_ascii=False),
                 detail="queued by question agent after resource indexing",
             )
             session.add(question_job)
-            goal_id = follow_up.get("goal_id")
-            if goal_id:
-                plan_job = BackgroundJob(
-                    tenant_id=tenant_id,
-                    job_type="ai_feature",
-                    status="queued",
-                    payload=json.dumps({"tenant_id": tenant_id, "feature": "learning_plan", "data": {
-                        "goal_id": int(goal_id), "course_id": course_id,
-                        "request": str(follow_up.get("request") or "根据已索引课程资料安排每日学习任务"),
-                    }}, ensure_ascii=False),
-                    detail="queued by task-scheduling agent after resource indexing",
-                )
-                session.add(plan_job)
+            vocabulary_job = BackgroundJob(
+                tenant_id=tenant_id,
+                job_type="generate_vocabulary",
+                status="queued",
+                payload=json.dumps({
+                    "tenant_id": tenant_id, "course_id": course_id,
+                    "count": int(follow_up.get("vocabulary_count", 10)),
+                    "request": str(follow_up.get("request") or "从课程资料提取核心词汇"),
+                }, ensure_ascii=False),
+                detail="queued vocabulary extraction after resource indexing",
+            )
+            session.add(vocabulary_job)
             session.commit()
             question_job_id = question_job.id
-            plan_job_id = plan_job.id if goal_id else None
-    return {"resource_id": resource_id, "document_index_id": result.document_index_id, "chunk_count": result.chunk_count, "question_job_id": question_job_id, "plan_job_id": plan_job_id}
+            vocabulary_job_id = vocabulary_job.id
+    elif vocabulary_source and course_id is not None:
+        with session_factory() as session:
+            set_session_tenant(session, tenant_id)
+            vocabulary_job = BackgroundJob(
+                tenant_id=tenant_id, job_type="generate_vocabulary", status="queued",
+                payload=json.dumps({"tenant_id": tenant_id, "course_id": course_id, "count": 30,
+                                    "request": f"从词汇资料 {filename} 提取可复习的单词、释义和例句"}, ensure_ascii=False),
+                detail="queued because an indexed vocabulary resource was detected",
+            )
+            session.add(vocabulary_job); session.commit(); vocabulary_job_id = vocabulary_job.id
+    return {"resource_id": resource_id, "document_index_id": result.document_index_id, "chunk_count": result.chunk_count, "question_job_id": question_job_id, "vocabulary_job_id": vocabulary_job_id, "plan_job_id": plan_job_id}

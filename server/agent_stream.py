@@ -924,7 +924,7 @@ _SCHEDULE_QUERY_TERMS = ("考试时间", "报名时间", "考试日期", "报名
 def _is_learning_launch_request(message: str) -> bool:
     """Recognize a request to create daily work, rather than merely discuss it."""
     value = message.casefold()
-    wants_tasks = any(term in value for term in ("生成任务", "创建任务", "写入工作区", "固定任务", "每日任务", "细化到每天", "安排每天"))
+    wants_tasks = any(term in value for term in ("生成任务", "创建任务", "写入工作区", "固定任务", "每日任务", "细化到每天", "安排每天", "学习计划", "备考计划", "制定计划"))
     # Learners naturally say "制定七天每日任务" without repeating the word
     # "计划".  Once a request also names daily tasks, that is still a durable
     # learning launch and must stop at the visible confirmation card.

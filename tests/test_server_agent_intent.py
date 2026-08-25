@@ -4,6 +4,7 @@ from server.ai_services.agent import infer_actions, plan_actions, run_learning_a
 from app.database import Database
 from app.models import AgentMemory, AgentMessage, Course, KnowledgePoint, Question, ReviewItem, StudyTask
 from server.agent_stream import _bounded_session_history, _collect_runtime_context, _is_learning_launch_request, _learning_launch_target_date, _memory_candidate, _requested_artifact, _requests_web_search, _should_use_parallel_subagents, learning_snapshot, rich_response_blocks
+from server.routers import _course_title_from_request
 
 
 def test_chinese_agent_intents_are_routed() -> None:
@@ -124,6 +125,12 @@ def test_daily_task_request_is_a_single_learning_launch_not_question_only() -> N
     assert _is_learning_launch_request("请直接生成六级备考的具体任务，每周固定任务，细化到每天，并为每项任务配练习题")
     assert _is_learning_launch_request("制定未来 7 天每日任务，围绕极限的定义安排练习，并生成 3 道题目")
     assert not _is_learning_launch_request("给我生成五道英语练习题")
+
+
+def test_full_exam_plan_request_creates_a_confirmed_learning_launch_and_clear_course_name() -> None:
+    request = "我要参加今年12月份的英语6级，目标425分以上，帮我制定学习计划和检索下载相关资料、题目与单词。"
+    assert _is_learning_launch_request(request)
+    assert _course_title_from_request(request) == "大学英语六级：备考"
 
 
 def test_learning_launch_honors_explicit_day_count() -> None:
