@@ -3,7 +3,7 @@ from datetime import date
 from server.ai_services.agent import infer_actions, plan_actions, run_learning_agent
 from app.database import Database
 from app.models import AgentMemory, AgentMessage, Course, KnowledgePoint, Question, ReviewItem, StudyTask
-from server.agent_stream import _bounded_session_history, _collect_runtime_context, _is_learning_launch_request, _learning_launch_target_date, _memory_candidate, _requested_artifact, _requests_web_search, _should_use_parallel_subagents, learning_snapshot, rich_response_blocks
+from server.agent_stream import _auto_importable_materials, _bounded_session_history, _collect_runtime_context, _is_learning_launch_request, _learning_launch_target_date, _memory_candidate, _requested_artifact, _requests_web_search, _should_use_parallel_subagents, learning_snapshot, rich_response_blocks
 from server.routers import _course_title_from_request
 
 
@@ -41,6 +41,28 @@ def test_plain_chat_does_not_queue_a_redundant_background_agent_job(tmp_path, mo
     assert any("Selected: chat" in event for event in events)
 
 
+def test_course_less_public_research_does_not_queue_curation_job(tmp_path, monkeypatch) -> None:
+    database = Database(f"sqlite:///{(tmp_path / 'public-research.db').as_posix()}")
+    database.create_schema()
+    monkeypatch.setattr("server.agent_stream.create_chat_model", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("server.agent_stream.plan_actions", lambda *_args, **_kwargs: ["research_curation"])
+    with database.session() as db:
+        from app.models import AgentSession
+        session = AgentSession(tenant_id="tenant-a", title="Research")
+        db.add(session)
+        db.flush()
+        session_id = session.id
+
+    events = list(__import__("server.agent_stream", fromlist=["stream_agent_reply"]).stream_agent_reply(
+        session_factory=database.session, tenant_id="tenant-a", user_id="user-a",
+        session_id=session_id, message="find CET-6 public resources", course_id=None,
+    ))
+
+    with database.session() as db:
+        assert db.query(__import__("app.models", fromlist=["BackgroundJob"]).BackgroundJob).count() == 0
+    assert any("Selected: research_curation" in event for event in events)
+
+
 def test_rich_blocks_turn_chinese_exam_style_questions_into_clickable_quiz_data() -> None:
     blocks = rich_response_blocks(
         "**第2题（句子听辨）**\n你听到一句话，这句话最可能出现什么场景？\n"
@@ -61,6 +83,18 @@ def test_model_action_plan_is_primary_when_structured_output_is_available() -> N
             return Planner()
 
     assert plan_actions("unrelated text", chat_model=Model()) == ["generate_questions", "generate_plan"]
+
+
+def test_model_can_open_a_coding_workspace_without_keyword_fallback() -> None:
+    class Planner:
+        def invoke(self, _prompt):
+            return {"actions": ["chat"], "intent": "workspace", "workspace_mode": "code"}
+
+    class Model:
+        def with_structured_output(self, _schema, **_kwargs):
+            return Planner()
+
+    assert plan_actions("帮我把这个想法做成可以反复试验的小工具", chat_model=Model()) == ["meta_code"]
 
 
 def test_background_web_actions_use_runtime_confirmation_boundary(monkeypatch) -> None:
@@ -87,6 +121,27 @@ def test_background_web_actions_record_runtime_observation_for_non_mutating_need
     assert result["actions"] == [{
         "feature": "generate_questions", "status": "needs_input",
         "detail": "Select a course before the agent can generate grounded questions.",
+    }]
+    assert result["runtime"]["status"] == "completed"
+
+
+def test_public_research_does_not_call_course_scoped_curation_without_a_course(monkeypatch) -> None:
+    monkeypatch.setattr("server.ai_services.agent.plan_actions", lambda _message, **_kwargs: ["research_curation"])
+    monkeypatch.setattr(
+        "server.ai_services.agent.run_ai_feature",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("course curation must not run")),
+    )
+
+    result = run_learning_agent(
+        payload={"tenant_id": "tenant-a", "data": {"message": "research CET-6 resources"}},
+        session_factory=lambda: None, embeddings=None, embedding_version="test",
+        dimensions=512, chat_model=None, provider="test", model_name="test",
+    )
+
+    assert result["actions"] == [{
+        "feature": "research_curation",
+        "status": "completed",
+        "detail": "Public-source research is complete in this conversation. Select a course only when you want to import or curate course materials.",
     }]
     assert result["runtime"]["status"] == "completed"
 
@@ -120,6 +175,16 @@ def test_stream_agent_detects_web_memory_and_explicit_artifacts() -> None:
     assert _memory_candidate("记住我薄弱的是线性代数", None)["category"] == "weak_point"
     assert _requested_artifact("请导出为 markdown 文件", []) == "markdown_report"
     assert _requested_artifact("给我学习总结", []) is None
+
+
+def test_natural_download_request_selects_only_direct_learning_files() -> None:
+    results = [
+        {"title": "CET-6 真题 PDF", "url": "https://example.test/cet6.pdf", "description": "download"},
+        {"title": "PDF 下载页", "url": "https://example.test/landing", "description": "PDF material"},
+    ]
+    assert _auto_importable_materials("检索下载相关资料", results) == [
+        {"title": "CET-6 真题 PDF", "url": "https://example.test/cet6.pdf"},
+    ]
 
 
 def test_daily_task_request_is_a_single_learning_launch_not_question_only() -> None:

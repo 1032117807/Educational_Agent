@@ -26,7 +26,10 @@ class MetaCodeProposal(BaseModel):
     python_code: str = Field(default="", max_length=12_000)
     artifact_type: Literal["python", "mermaid"] = "python"
     mermaid_code: str = Field(default="", max_length=12_000)
-    expected_output: str = Field(default="", max_length=300)
+    # Providers occasionally return a compact JSON example plus a short
+    # explanation.  Keep the UI concise, but do not reject an otherwise safe
+    # proposal before the server can validate its code.
+    expected_output: str = Field(default="", max_length=1200)
     publishable: bool = False
     skill_name: str = ""
     skill_description: str = Field(default="", max_length=500)

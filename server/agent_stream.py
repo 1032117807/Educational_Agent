@@ -402,7 +402,10 @@ def _legacy_requested_artifact_v1(message: str, actions: list[str]) -> str | Non
 
 def _auto_importable_materials(message: str, results: list[dict[str, object]]) -> list[dict[str, str]]:
     """Honor an explicit learner request to auto-import safe file candidates only."""
-    if not any(term in message.casefold() for term in ("自动下载", "自动导入", "自动抓取", "帮我下载")):
+    if not any(term in message.casefold() for term in (
+        "自动下载", "自动导入", "自动抓取", "帮我下载",
+        "检索下载", "下载相关资料", "下载资料", "下载学习资料",
+    )):
         return []
     blocked = ("通知", "公告", "报名", "考试时间", "schedule", "notice")
     file_signal = re.compile(r"\.(?:pdf|docx?|pptx?|xlsx?|txt)(?:[?#].*)?$", re.I)
@@ -412,7 +415,10 @@ def _auto_importable_materials(message: str, results: list[dict[str, object]]) -
         text = f"{item.get('title', '')} {item.get('description', '')}".casefold()
         if not url.startswith("https://") or any(term in text for term in blocked):
             continue
-        if file_signal.search(url) or any(token in text for token in ("pdf", "教材", "真题", "讲义", "课件")):
+        # A title claiming to contain a PDF is not enough: importing an HTML
+        # landing page caused the first learning workflow to stop before
+        # indexing. Only hand the importer a direct, supported file URL.
+        if file_signal.search(url):
             selected.append({"url": url, "title": str(item.get("title", ""))[:300]})
     return selected[:2]
 
@@ -491,8 +497,10 @@ def _collect_runtime_context(
     """Collect read-only evidence through the shared bounded Agent Runtime."""
     cloud = WebAgentToolExecutor(tenant_id=tenant_id, session_id=session_id)
     research_query = message
+    if any(term in message.casefold() for term in ("cet-6", "cet6", "大学英语六级", "英语6级", "英语六级")):
+        research_query = "大学英语六级 CET-6 历年真题 听力 阅读 词汇 PDF 学习资料"
     if any(term in message.casefold() for term in ("资料", "教材", "真题", "练习", "教程", "学习材料")):
-        research_query = f"{message} PDF 教材 真题 教程 学习资料"
+        research_query = research_query if research_query != message else f"{message} PDF 教材 真题 教程 学习资料"
     needs_web = _requests_web_search(message)
     use_subagents = _should_use_parallel_subagents(message)
 
@@ -853,7 +861,16 @@ def stream_agent_reply(*, session_factory, tenant_id: str, user_id: str, session
         # A learning launch is executed only by its explicit confirmation card.
         # Do not queue the generic Agent worker in parallel: it can generate
         # questions alone and incorrectly report that approved actions ran.
-        if actions != ["chat"] and not already_started and not learning_launch_requested and not pending_request and not (
+        # Coding proposals are prepared and exercised directly by the browser
+        # workspace. They are not a background learning workflow.
+        # A course-less research action has already produced public sources in
+        # this stream. Only queue research curation when a selected course can
+        # supply indexed evidence; otherwise no background work is needed.
+        has_background_action = any(
+            action not in {"chat", "meta_code", "research_curation"}
+            for action in actions
+        ) or ("research_curation" in actions and course_id is not None)
+        if has_background_action and not already_started and not learning_launch_requested and not pending_request and not (
             "generate_plan" in actions and "generate_questions" in actions
         ):
             job = BackgroundJob(tenant_id=tenant_id, requested_by=user_id, job_type="learning_agent", status="queued", payload=json.dumps({"tenant_id": tenant_id, "data": {"message": message, "course_id": course_id}}, ensure_ascii=False), detail="queued by streaming agent")

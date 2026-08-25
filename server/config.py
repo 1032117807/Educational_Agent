@@ -4,7 +4,7 @@ from functools import lru_cache
 import re
 from urllib.parse import unquote, urlparse
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,7 +37,10 @@ class ServerSettings(BaseSettings):
     # Running generated code requires the API container to access Docker. Keep
     # this opt-in so the default SaaS deployment does not expose the host
     # Docker socket to an internet-facing application.
-    web_coding_enabled: bool = False
+    web_coding_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LEARNING_WEB_CODING_ENABLED", "WEB_CODING_ENABLED"),
+    )
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

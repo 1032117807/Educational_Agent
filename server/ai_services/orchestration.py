@@ -49,13 +49,15 @@ def _attach_learner_material(session: Session, tenant_id: str, course_id: int | 
             task.knowledge_point_id = task.knowledge_point_id or point.id
             session.add(TaskAssignment(tenant_id=tenant_id, task_id=task.id, knowledge_point_id=point.id, position=1))
         title = task.title.casefold()
-        wants_questions = any(term in title for term in ("练习", "题", "测试", "模拟", "阅读", "听力", "翻译", "写作"))
-        if wants_questions and questions:
+        # A daily learning task must be demonstrably learnable in place. Give
+        # every generated task a small question set rather than relying on
+        # fragile title-language heuristics such as only matching "练习".
+        if questions:
             chosen = questions[question_cursor:question_cursor + 3] or questions[:3]
             for position, question in enumerate(chosen, start=10):
                 session.add(TaskAssignment(tenant_id=tenant_id, task_id=task.id, question_id=question.id, position=position))
             question_cursor = (question_cursor + len(chosen)) % len(questions)
-        if ("词汇" in title or "单词" in title) and vocab:
+        if any(term in title for term in ("词汇", "单词", "vocabulary", "word", "flashcard")) and vocab:
             chosen_vocab = vocab[vocabulary_cursor:vocabulary_cursor + 10] or vocab[:10]
             for position, item in enumerate(chosen_vocab, start=100):
                 session.add(TaskAssignment(tenant_id=tenant_id, task_id=task.id, review_item_id=item.id, position=position))

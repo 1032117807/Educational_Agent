@@ -1,6 +1,7 @@
 import pytest
 
 from ai.config import AISettings
+from server.config import ServerSettings
 
 
 def test_pgvector_schema_rejects_unsupported_embedding_dimensions() -> None:
@@ -31,3 +32,8 @@ def test_openai_compatible_chat_requires_base_url() -> None:
             base_url="",
             embedding_dimensions=512,
         )
+
+
+def test_web_coding_uses_the_documented_deployment_environment_name(monkeypatch) -> None:
+    monkeypatch.setenv("LEARNING_WEB_CODING_ENABLED", "true")
+    assert ServerSettings().web_coding_enabled is True

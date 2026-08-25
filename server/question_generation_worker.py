@@ -173,12 +173,23 @@ def generate_grounded_questions(
         knowledge_points = session.scalars(select(KnowledgePoint).where(
             KnowledgePoint.tenant_id == tenant_id, KnowledgePoint.course_id == course_id,
         ).order_by(KnowledgePoint.importance.desc(), KnowledgePoint.id)).all()
-        for item in questions:
+        for question_index, item in enumerate(questions, start=1):
             point = selected_point or next((candidate for candidate in knowledge_points
                           if candidate.name.casefold() in item["prompt"].casefold()), None)
             if point is None and knowledge_points:
                 point = knowledge_points[len(draft_ids) % len(knowledge_points)]
             if auto_accept:
+                if point is None:
+                    # Give the learner an evidence-grounded concept to study
+                    # before attempting this first set of generated questions.
+                    label = next((tag.strip() for tag in item["tags"].split(",") if tag.strip()), "学习要点")
+                    point = KnowledgePoint(
+                        tenant_id=tenant_id, course_id=course_id,
+                        name=f"{label[:120]} {question_index}".strip(),
+                        category="概念", definition=item["explanation"][:20000],
+                        difficulty=item["difficulty"], importance=3,
+                    )
+                    session.add(point); session.flush(); knowledge_points.append(point)
                 question = Question(
                     tenant_id=tenant_id, course_id=course_id, knowledge_point_id=point.id if point else None,
                     kind=item["kind"], prompt=item["prompt"], answer=item["answer"], explanation=item["explanation"],

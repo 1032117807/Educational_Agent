@@ -198,6 +198,24 @@
       const editor = document.createElement('textarea'); editor.className = 'agent-workspace-editor'; editor.spellcheck = false; editor.value = source;
       const fileList = document.createElement('div'); fileList.className = 'agent-workspace-files';
       const output = document.createElement('pre'); output.className = 'agent-workspace-output';
+      const diagramPreview = document.createElement('div'); diagramPreview.className = 'agent-diagram-preview';
+      const renderDiagram = () => {
+        if (!isDiagram) return;
+        const nodes = [];
+        const seen = new Set();
+        const lines = editor.value.split(/\r?\n/).filter(line => /-->|---/.test(line));
+        diagramPreview.replaceChildren();
+        lines.slice(0, 24).forEach(line => {
+          const parts = line.split(/-->|---/).map(part => part.trim().replace(/^[A-Za-z0-9_-]+(?:\[|\(|\{)?/, '').replace(/[\]\)\}]+$/, '').trim()).filter(Boolean);
+          parts.forEach(part => { if (!seen.has(part)) { seen.add(part); nodes.push(part.slice(0, 90)); } });
+        });
+        if (!nodes.length) { diagramPreview.textContent = '图表源码还没有可预览的流程节点。'; return; }
+        nodes.forEach((label, index) => {
+          const node = document.createElement('span'); node.className = 'agent-diagram-node'; node.textContent = label;
+          diagramPreview.appendChild(node);
+          if (index < nodes.length - 1) { const arrow = document.createElement('span'); arrow.className = 'agent-diagram-arrow'; arrow.textContent = '→'; diagramPreview.appendChild(arrow); }
+        });
+      };
       const invokeTool = async (tool_name, arguments, confirmed = false) => request(`/agent/sessions/${state.agentSessionId}/tools`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tool_name, arguments, confirmed }) });
       const refreshFiles = async () => {
         try {
@@ -217,7 +235,12 @@
       save.onclick = async () => { const path = filename.value.trim(); if (!path) { output.textContent = '请填写文件名。'; return; } if (!confirm(`将写入工作区文件 ${path}。确认保存？`)) return; try { await invokeTool('coding.write_workspace', { relative_path: path, content: editor.value }, true); output.textContent = `已保存 ${path}`; refreshFiles(); } catch (error) { output.textContent = `保存失败：${error.message}`; } };
       const runSaved = document.createElement('button'); runSaved.type = 'button'; runSaved.className = 'secondary'; runSaved.textContent = '运行已保存的 Python'; runSaved.disabled = isDiagram;
       runSaved.onclick = async () => { try { const result = await invokeTool('coding.run_workspace_python', { relative_path: filename.value.trim() }); output.textContent = String(result.result?.stdout || result.result?.stderr || '运行完成。'); } catch (error) { output.textContent = `运行失败：${error.message}`; } };
-      workspace.append(filename, save, runSaved, editor, fileList, output); refreshFiles();
+      const saveAndRun = document.createElement('button'); saveAndRun.type = 'button'; saveAndRun.className = 'secondary'; saveAndRun.textContent = '保存并运行'; saveAndRun.disabled = isDiagram;
+      saveAndRun.onclick = async () => { const path = filename.value.trim(); if (!path) { output.textContent = '请填写文件名。'; return; } if (!confirm(`将保存并运行 ${path}。确认继续？`)) return; try { await invokeTool('coding.write_workspace', { relative_path: path, content: editor.value }, true); const result = await invokeTool('coding.run_workspace_python', { relative_path: path }); output.textContent = String(result.result?.stdout || result.result?.stderr || '运行完成。'); refreshFiles(); } catch (error) { output.textContent = `保存或运行失败：${error.message}`; } };
+      editor.addEventListener('input', renderDiagram);
+      if (isDiagram) { renderDiagram(); workspace.append(filename, save, editor, diagramPreview, fileList, output); }
+      else workspace.append(filename, save, runSaved, saveAndRun, editor, fileList, output);
+      refreshFiles();
       const run = document.createElement('button'); run.type = 'button'; run.className = 'primary'; run.textContent = '运行隔离测试';
       run.onclick = async () => {
         run.disabled = true; run.textContent = '正在运行...'; steps.children[2].textContent = '正在调用 coding.run_python 沙箱';

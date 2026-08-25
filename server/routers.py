@@ -91,6 +91,33 @@ def _normalized_answer(value: str, kind: str) -> str | tuple[str, ...]:
     if kind in CHOICE_QUESTION_KINDS:
         return _choice_token(value)
     return " ".join(value.strip().casefold().split())
+
+
+def _refresh_course_goal_progress(db, *, tenant_id: str, course_id: int | None) -> None:
+    """Keep plan progress explainably tied to completed learning and answers."""
+    if course_id is None:
+        return
+    tasks = db.scalars(select(StudyTask).where(
+        StudyTask.tenant_id == tenant_id, StudyTask.course_id == course_id,
+    )).all()
+    task_score = 100.0 * sum(task.completed is True for task in tasks) / len(tasks) if tasks else 0.0
+    attempts = db.scalars(select(QuestionAttempt).join(
+        Question, Question.id == QuestionAttempt.question_id,
+    ).where(
+        QuestionAttempt.tenant_id == tenant_id, Question.course_id == course_id,
+        QuestionAttempt.correct.is_not(None),
+    )).all()
+    accuracy = 100.0 * sum(attempt.correct is True for attempt in attempts) / len(attempts) if attempts else 0.0
+    # A task earns progress only through its questions. Once attempts exist,
+    # their correctness contributes 30% of the goal rather than treating a
+    # checkbox as equivalent to demonstrated learning.
+    progress = round(task_score * (0.7 if attempts else 1.0) + accuracy * (0.3 if attempts else 0.0))
+    goals = db.scalars(select(StudyGoal).where(
+        StudyGoal.tenant_id == tenant_id, StudyGoal.course_id == course_id,
+    )).all()
+    for goal in goals:
+        goal.progress = max(0, min(100, progress))
+        goal.status = "completed" if goal.progress >= 100 else "active"
 class RegisterRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=10, max_length=200)
@@ -1934,6 +1961,8 @@ def complete_practice_session(session_id: int, context: CurrentContext, db: DbSe
         elif task is not None:
             task.status = "in_progress"
             task_result = {"task_id": task.id, "completed": False, "accuracy": round(accuracy * 100, 1), "reason": "answer every assigned question and reach 60% accuracy"}
+        if task is not None:
+            _refresh_course_goal_progress(db, tenant_id=context.tenant_id, course_id=task.course_id)
     record_audit(db, context, "practice_session.complete", "practice_session", str(session.id), {"correct": session.correct})
     record_learning_event(db, context, "study_completed", course_id=session.course_id,
                           payload={"practice_session_id": session.id, "total": session.total,
@@ -2484,16 +2513,15 @@ def launch_learning_loop(session_id: int, payload: LearningLaunchRequest, contex
     # Planning uses the learner's goal, task history and mastery snapshot. It
     # must not wait for a document upload; only generated questions require
     # indexed evidence.
+    # Questions must exist before the planner runs.  Queuing both jobs here
+    # races on fast workers and produces empty checklist tasks; the question
+    # worker queues the plan after it has committed grounded questions.
     plan_job = None
-    if indexed_evidence:
-        plan_job = BackgroundJob(tenant_id=context.tenant_id, requested_by=context.user_id, job_type="ai_feature", status="queued",
-            payload=json.dumps({"tenant_id": context.tenant_id, "feature": "learning_plan", "data": {"goal_id": goal.id, "course_id": course_id, "request": payload.request}}, ensure_ascii=False), detail="queued by task-scheduling agent")
-        db.add(plan_job); db.flush()
     question_job_id = None
     vocabulary_job_id = None
     if indexed_evidence:
         question_job = BackgroundJob(tenant_id=context.tenant_id, requested_by=context.user_id, job_type="generate_questions", status="queued",
-            payload=json.dumps({"tenant_id": context.tenant_id, "course_id": course_id, "request": payload.request, "count": payload.question_count, "difficulty": 3, "kinds": ["single_choice", "short_answer"], "auto_practice": True, "goal_id": goal.id, "agent_session_id": session_id}, ensure_ascii=False), detail="queued by question agent from indexed course materials")
+            payload=json.dumps({"tenant_id": context.tenant_id, "course_id": course_id, "request": payload.request, "count": payload.question_count, "difficulty": 3, "kinds": ["single_choice", "short_answer"], "auto_practice": True, "auto_accept": True, "goal_id": goal.id, "agent_session_id": session_id}, ensure_ascii=False), detail="queued by question agent from indexed course materials")
         db.add(question_job); db.flush(); question_job_id = question_job.id
         # Vocabulary extraction requires indexed course material. It is not a
         # prerequisite for a learner asking to create a plan, so do not queue
