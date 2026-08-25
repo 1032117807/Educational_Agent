@@ -51,3 +51,4 @@
   .sidebar .icon-button::after{content:'退出';font-size:13px;font-weight:700}
 }
 .course-task-check{position:relative}
+.sidebar .nav-item[data-view="tasks"]{display:none}
