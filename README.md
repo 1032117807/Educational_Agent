@@ -33,6 +33,20 @@ The workflow is coordinated as a LangGraph-style stateful adaptive learning grap
 - Web download, resource import, code execution, and workspace writes are bounded by permissions, confirmations, or a sandbox.
 - Tenant data is organization-isolated and consequential writes are auditable.
 
+## Complex Agent Task Screenshots
+
+The following screenshot is from the running Web client. A single request asking the assistant to draw the learning workflow is turned into a multi-step Coding Agent task: it generates and validates a Mermaid proposal, exposes the editable source, renders the workflow in the chat, and keeps normal tutoring actions available below the result.
+
+![Coding Agent complex task: Mermaid workflow generation and in-chat visualization](docs/images/agent-complex-task-flow.png)
+
+The same Agent workspace supports a research-oriented flow: search public sources, rank candidate learning materials, inspect a selected page, import a directly downloadable PDF/text resource, wait for background parsing and indexing, and then use the indexed evidence for question generation. Pages that are only catalogues or cannot provide an importable file remain references instead of being reported as successful imports.
+
+Typical complex task examples:
+
+- “Prepare a CET-6 study plan, search for reliable materials, import the available PDFs, and generate the first diagnostic exercise.”
+- “Draw my adaptive learning workflow, show the Mermaid result in the chat, and revise the diagram after I change the wording.”
+- “Search the selected source, compare the evidence, create a course task, grade my answers, and route weak knowledge points back to supplemental practice.”
+
 这是一个面向个人学习记录的课程工作台，不是单纯的聊天机器人。它把课程、资料、计划、练习和复习结果放进同一个学习空间：资料进库以后才能用于检索和出题；每次练习都会留下作答记录；错题和知识点掌握情况会回到当天任务中。
 
 项目包含两个入口：
