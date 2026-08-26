@@ -46,6 +46,12 @@ class ServerSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_secret(self) -> "ServerSettings":
+        # The checked-in development template intentionally contains a
+        # non-routable PostgreSQL password.  Make a local Web preview usable
+        # without requiring Docker/PostgreSQL, while never applying this
+        # fallback to an explicit production environment.
+        if self.app_env.lower() not in {"production", "prod"} and _is_placeholder(self.database_url):
+            self.database_url = "sqlite:///data/learning.db"
         if self.app_env.lower() in {"production", "prod"} and (
             len(self.secret_key) < 32 or _is_placeholder(self.secret_key)
         ):

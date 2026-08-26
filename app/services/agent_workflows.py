@@ -14,6 +14,7 @@ from app.database import Database
 from app.models import AgentHandoff, AgentWorkflow, Course, KnowledgePointDraft, ResourceFile
 from ai.agents.orchestrator import LearningOrchestrator
 from app.services.cancellation import CancellationToken, OperationCancelled
+from ai.agents.adaptive_learning_graph import AdaptiveLearningGraph, AdaptiveLearningState
 
 StepProgress = Callable[[str, str, str], None]
 
@@ -98,6 +99,56 @@ class AgentWorkflowService:
     def question_ids(self, workflow_id: int) -> list[int]:
         item = self.get(workflow_id)
         return [int(value) for value in self._context(item).get("question_ids", [])]
+
+    def run_adaptive_loop(
+        self,
+        workflow_id: int,
+        *,
+        answers: list[dict[str, Any]],
+        assess: Callable[[AdaptiveLearningState], list[dict[str, Any]]],
+        remediate: Callable[[AdaptiveLearningState], dict[str, Any]],
+        advance: Callable[[AdaptiveLearningState], dict[str, Any]],
+        revise_plan: Callable[[AdaptiveLearningState], dict[str, Any]],
+        negotiate: Callable[[AdaptiveLearningState], dict[str, Any]] | None = None,
+        max_rounds: int = 5,
+        mastery_threshold: float = 70,
+    ) -> WorkflowOutcome:
+        """Run one resumable adaptive-learning graph and persist its state.
+
+        Callers supply existing question, specialist and planning services; the
+        graph only owns control flow and serializable state.
+        """
+        item = self.get(workflow_id)
+        context = self._context(item)
+        state: AdaptiveLearningState = {
+            "course_id": item.course_id,
+            "round": int(context.get("adaptive_round", 0)),
+            "max_rounds": max_rounds,
+            "mastery_threshold": mastery_threshold,
+            "answers": answers,
+            "weak_points": context.get("adaptive_weak_points", []),
+            "practice_question_ids": context.get("adaptive_question_ids", []),
+            "plan_updates": context.get("adaptive_plan_updates", []),
+            "negotiations": context.get("adaptive_negotiations", []),
+        }
+        result = AdaptiveLearningGraph(
+            assess=assess, remediate=remediate, advance=advance,
+            revise_plan=revise_plan, negotiate=negotiate,
+        ).invoke(state)
+        context.update({
+            "adaptive_round": result.get("round", 0),
+            "adaptive_weak_points": result.get("weak_points", []),
+            "adaptive_question_ids": result.get("practice_question_ids", []),
+            "adaptive_plan_updates": result.get("plan_updates", []),
+            "adaptive_negotiations": result.get("negotiations", []),
+            "adaptive_status": "completed" if result.get("next_action") == "complete" else "awaiting_practice",
+        })
+        with self.database.session() as db:
+            current = self._get_in_session(db, workflow_id)
+            current.context_json = json.dumps(context, ensure_ascii=False, default=str)
+            current.updated_at = datetime.now()
+        status = context["adaptive_status"]
+        return WorkflowOutcome(workflow_id, "practice", status, "自适应学习循环已更新", context)
 
     def latest_for_session(self, session_id: int) -> AgentWorkflow | None:
         with self.database.session() as db:

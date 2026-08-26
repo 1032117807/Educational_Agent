@@ -1,5 +1,38 @@
 # Personalized Adaptive Learning Agent
 
+## AI Learning Assistant Overview
+
+This project is an AI learning assistant built around a continuous learning loop, rather than a simple chat interface. It connects goals, plans, learning resources, practice, review, and learner data through both Web SaaS and Windows desktop clients.
+
+### Learning Loop and Multi-Agent Workflows
+
+The assistant can turn a natural-language learning request into a stateful workflow:
+
+1. Analyze the goal, deadline, selected course, current mastery, and available study time.
+2. Create a staged plan and daily tasks.
+3. Search public sources, identify downloadable learning files, and import them into the course resource library.
+4. Parse and index resources, then retrieve grounded evidence with RAG.
+5. Generate practice based on indexed material, grade submissions, and retain mistakes.
+6. Update per-knowledge-point mastery and the spaced-review queue from every result.
+7. Route unmastered content back to supplemental learning and targeted practice; move mastered content forward and adjust the plan over multiple study rounds.
+
+The workflow is coordinated as a LangGraph-style stateful adaptive learning graph. Research, planning, question generation, diagnosis, and review nodes cooperate while course creation, plan writes, and imports retain confirmation and audit boundaries.
+
+### AI Assistant Features
+
+- Conversational tutoring: explanations, examples, hints, Socratic questions, and quick quizzes.
+- Web search and resource import: search public sources, download importable PDF/text resources, and create background indexing jobs. Reference-only pages are reported clearly instead of being falsely marked as imported.
+- Restricted Web Coding Agent: generate temporary proposals for computation, analysis, and diagrams. Code runs only after confirmation in a no-network, read-only sandbox.
+- In-chat visualization: Mermaid flowcharts, relationship diagrams, and learning paths are rendered as safe inline SVG images in the chat.
+- Vocabulary, practice, and review: vocabulary review, question banks, answer records, mastery analytics, and 1/3/7/14/30-day spaced review.
+- Administrator observability: administrators can review model token consumption by user and tenant.
+
+### Trust and Safety
+
+- Question generation is grounded in indexed course resources and retrieval evidence. When evidence is insufficient, the assistant asks for material instead of inventing sources.
+- Web download, resource import, code execution, and workspace writes are bounded by permissions, confirmations, or a sandbox.
+- Tenant data is organization-isolated and consequential writes are auditable.
+
 这是一个面向个人学习记录的课程工作台，不是单纯的聊天机器人。它把课程、资料、计划、练习和复习结果放进同一个学习空间：资料进库以后才能用于检索和出题；每次练习都会留下作答记录；错题和知识点掌握情况会回到当天任务中。
 
 项目包含两个入口：

@@ -129,6 +129,9 @@ class AIRun(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    # The initiating member is retained separately from tenant scope so
+    # organization owners can audit consumption without exposing prompts.
+    user_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     run_uuid: Mapped[str] = mapped_column(
         String(36),
         unique=True,

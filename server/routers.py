@@ -484,6 +484,41 @@ def list_organization_members(context: CurrentContext, db: DbSession) -> list[di
     } for member, user in rows]
 
 
+@router.get("/organization/usage")
+def organization_token_usage(
+    context: CurrentContext, db: DbSession, days: int = 30,
+) -> dict[str, object]:
+    """Owner/admin-only AI token totals, grouped by the initiating member."""
+    require_org_admin(context)
+    if not 1 <= days <= 365:
+        raise HTTPException(status_code=422, detail="days must be between 1 and 365")
+    since = datetime.now() - timedelta(days=days)
+    rows = db.execute(
+        select(
+            AIRun.user_id,
+            User.email,
+            User.display_name,
+            func.coalesce(func.sum(AIRun.input_tokens), 0),
+            func.coalesce(func.sum(AIRun.output_tokens), 0),
+            func.count(AIRun.id),
+        )
+        .select_from(AIRun)
+        .outerjoin(User, User.id == AIRun.user_id)
+        .where(AIRun.tenant_id == context.tenant_id, AIRun.created_at >= since)
+        .group_by(AIRun.user_id, User.email, User.display_name)
+        .order_by((func.coalesce(func.sum(AIRun.input_tokens), 0) + func.coalesce(func.sum(AIRun.output_tokens), 0)).desc())
+    ).all()
+    users = [{
+        "user_id": user_id,
+        "email": email or "Unattributed historical runs",
+        "display_name": display_name or "Unattributed",
+        "input_tokens": int(input_tokens), "output_tokens": int(output_tokens),
+        "total_tokens": int(input_tokens) + int(output_tokens), "run_count": int(run_count),
+    } for user_id, email, display_name, input_tokens, output_tokens, run_count in rows]
+    totals = {"input_tokens": sum(item["input_tokens"] for item in users), "output_tokens": sum(item["output_tokens"] for item in users)}
+    return {"days": days, "users": users, "totals": {**totals, "total_tokens": totals["input_tokens"] + totals["output_tokens"]}}
+
+
 @router.post("/organization/members", status_code=status.HTTP_201_CREATED)
 def add_organization_member(
     payload: OrganizationMemberRequest, context: CurrentContext, db: DbSession
@@ -2341,7 +2376,7 @@ def queue_rag_job(payload: RagRequest, context: CurrentContext, db: DbSession) -
         requested_by=context.user_id,
         job_type="rag_question",
         status="queued",
-        payload=json.dumps({"tenant_id": context.tenant_id, "question": payload.question, "course_id": payload.course_id}, ensure_ascii=False),
+        payload=json.dumps({"tenant_id": context.tenant_id, "user_id": context.user_id, "question": payload.question, "course_id": payload.course_id}, ensure_ascii=False),
         detail="等待 worker 处理",
     )
     db.add(job)
@@ -2375,7 +2410,7 @@ def queue_question_generation_job(payload: AiQuestionGenerationRequest, context:
         requested_by=context.user_id,
         job_type="generate_questions",
         status="queued",
-        payload=json.dumps({"tenant_id": context.tenant_id, "course_id": payload.course_id,
+        payload=json.dumps({"tenant_id": context.tenant_id, "user_id": context.user_id, "course_id": payload.course_id,
                             "knowledge_point_id": payload.knowledge_point_id,
                             "resource_ids": list(dict.fromkeys(payload.resource_ids)),
                             "request": payload.request, "count": payload.count,
@@ -2421,7 +2456,7 @@ def queue_ai_feature_job(payload: AiFeatureRequest, context: CurrentContext, db:
         requested_by=context.user_id,
         job_type="ai_feature",
         status="queued",
-        payload=json.dumps({"tenant_id": context.tenant_id, "feature": payload.feature, "data": data}, ensure_ascii=False),
+        payload=json.dumps({"tenant_id": context.tenant_id, "user_id": context.user_id, "feature": payload.feature, "data": data}, ensure_ascii=False),
         detail=f"waiting for AI feature: {payload.feature}",
     )
     db.add(job)
@@ -2434,7 +2469,7 @@ def queue_ai_feature_job(payload: AiFeatureRequest, context: CurrentContext, db:
 def queue_learning_agent_job(payload: AgentRequest, context: CurrentContext, db: DbSession) -> dict[str, str]:
     if payload.course_id is not None and db.scalar(select(Course.id).where(Course.id == payload.course_id, Course.tenant_id == context.tenant_id)) is None:
         raise HTTPException(status_code=404, detail="course not found")
-    job = BackgroundJob(tenant_id=context.tenant_id, requested_by=context.user_id, job_type="learning_agent", status="queued", payload=json.dumps({"tenant_id": context.tenant_id, "data": payload.model_dump()}, ensure_ascii=False), detail="agent is analyzing your request")
+    job = BackgroundJob(tenant_id=context.tenant_id, requested_by=context.user_id, job_type="learning_agent", status="queued", payload=json.dumps({"tenant_id": context.tenant_id, "user_id": context.user_id, "data": payload.model_dump()}, ensure_ascii=False), detail="agent is analyzing your request")
     db.add(job)
     record_audit(db, context, "agent.run", "agent", "learning")
     db.commit()

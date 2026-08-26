@@ -280,6 +280,7 @@ class PracticeDialog(QDialog):
         *, jobs: JobService | None = None,
         grading_factory: Callable[[], SubjectiveGradingService] | None = None,
         analysis_factory: Callable[[], ErrorAnalysisService] | None = None,
+        adaptive_callback: Callable[[int], object] | None = None,
     ) -> None:
         super().__init__(parent)
         self.service = service
@@ -287,6 +288,7 @@ class PracticeDialog(QDialog):
         self.jobs = jobs
         self.grading_factory = grading_factory
         self.analysis_factory = analysis_factory
+        self.adaptive_callback = adaptive_callback
         self.error_worker = None
         self.grading_worker = None
         self.setWindowTitle("快速练习")
@@ -675,6 +677,9 @@ class PracticePage(QWidget):
         self.start_practice_for_questions([question_id])
 
     def start_practice_for_questions(self, question_ids: list[int] | tuple[int, ...]) -> bool:
+        return self._start_practice_for_questions(question_ids)
+
+    def _start_practice_for_questions(self, question_ids, adaptive_callback=None) -> bool:
         try:
             prepared = self.service.create_practice_for_questions(list(question_ids))
         except ValueError as exc:
@@ -687,13 +692,19 @@ class PracticePage(QWidget):
             jobs=self.jobs,
             grading_factory=self.grading_factory,
             analysis_factory=self.analysis_factory,
+            adaptive_callback=adaptive_callback,
         )
         completed = [False]
         dialog.completed.connect(lambda: completed.__setitem__(0, True))
         dialog.completed.connect(self.report_requested.emit)
         dialog.exec()
+        if completed[0] and adaptive_callback is not None:
+            adaptive_callback(dialog.practice.id)
         self.refresh()
         return completed[0]
+
+    def start_adaptive_practice_for_questions(self, question_ids, adaptive_callback) -> bool:
+        return self._start_practice_for_questions(question_ids, adaptive_callback)
 
     def create(self) -> None:
         dialog = QuestionDialog(self.service, self)

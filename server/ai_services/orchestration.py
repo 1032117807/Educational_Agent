@@ -17,6 +17,7 @@ from app.models import (
 )
 from server.rag_retriever import TenantPgVectorRetriever
 from ai.gateways.rerank import Reranker
+from ai.usage import response_token_usage
 from server.tenant_session import set_session_tenant
 
 
@@ -141,6 +142,7 @@ def run_ai_feature(*, payload: dict[str, object], session_factory: Callable[[], 
         ) if needs_evidence else []
         if needs_evidence and not hits: raise ValueError("no indexed evidence found for this AI task")
         response = chat_model.invoke(_prompt(feature, str(data.get("request", "")), context, _evidence(hits)))
+        input_tokens, output_tokens = response_token_usage(response)
         output = _json_object(response.content)
         created_tasks = 0
         created_task_rows: list[StudyTask] = []
@@ -211,7 +213,7 @@ def run_ai_feature(*, payload: dict[str, object], session_factory: Callable[[], 
                     extracted_drafts.append((item, list(dict.fromkeys(item_citations))))
             elif not isinstance(citations, list) or not citations or any(not isinstance(x, int) or x < 1 or x > len(hits) for x in citations):
                 raise ValueError("AI output must contain valid evidence citations")
-        run = AIRun(tenant_id=tenant_id, run_uuid=str(uuid4()), feature=feature, status="completed", provider=provider, model_name=model_name, prompt_version="saas-ai-services-v1", input_json=json.dumps(data, ensure_ascii=False), output_json=json.dumps(output, ensure_ascii=False), course_id=course_id, finished_at=datetime.now())
+        run = AIRun(tenant_id=tenant_id, user_id=str(payload.get("user_id") or "") or None, run_uuid=str(uuid4()), feature=feature, status="completed", provider=provider, model_name=model_name, prompt_version="saas-ai-services-v1", input_json=json.dumps(data, ensure_ascii=False), output_json=json.dumps(output, ensure_ascii=False), input_tokens=input_tokens, output_tokens=output_tokens, course_id=course_id, finished_at=datetime.now())
         session.add(run); session.flush()
         for number, hit in enumerate(hits, 1): session.add(AICitation(tenant_id=tenant_id, ai_run_id=run.id, chunk_id=hit.chunk_id, citation_number=number, quote_text=hit.content[:1000], relevance_score=hit.rrf_score))
         for item, item_citations in extracted_drafts:

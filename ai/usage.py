@@ -58,6 +58,14 @@ def _read_usage(payload: dict[str, Any] | None) -> tuple[int, int] | None:
     return None
 
 
+def response_token_usage(response: Any) -> tuple[int, int]:
+    """Return normalized token counts from one direct LangChain response."""
+    counts = _read_usage(getattr(response, "usage_metadata", None))
+    if counts is None:
+        counts = _read_usage((getattr(response, "response_metadata", None) or {}).get("token_usage"))
+    return counts or (0, 0)
+
+
 class UsageCollector(BaseCallbackHandler):
     """把 LLM 响应里的 token 用量累加到当前活跃的 :class:`TokenUsage`。"""
 

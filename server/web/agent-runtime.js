@@ -206,20 +206,30 @@
       const diagramPreview = document.createElement('div'); diagramPreview.className = 'agent-diagram-preview';
       const renderDiagram = () => {
         if (!isDiagram) return;
-        const nodes = [];
-        const seen = new Set();
-        const lines = editor.value.split(/\r?\n/).filter(line => /-->|---/.test(line));
+        const nodes = new Map(); const edges = [];
+        const addNode = raw => {
+          const match = raw.trim().match(/^([A-Za-z0-9_-]+)\s*(?:\[([^\]]+)\]|\(([^)]+)\)|\{([^}]+)\})?$/);
+          if (!match) return null;
+          const id = match[1]; if (!nodes.has(id)) nodes.set(id, (match[2] || match[3] || match[4] || id).trim().slice(0, 60));
+          return id;
+        };
+        editor.value.split(/\r?\n/).slice(0, 32).forEach(line => {
+          const match = line.match(/^\s*(.+?)\s+--\s+.+?\s+-->\s*(.+?)\s*$/) || line.match(/^\s*(.+?)\s*(?:-->|---)\s*(.+?)\s*$/); if (!match) return;
+          const from = addNode(match[1]); const to = addNode(match[2].replace(/^\|[^|]*\|\s*/, ''));
+          if (from && to) edges.push([from, to]);
+        });
         diagramPreview.replaceChildren();
-        lines.slice(0, 24).forEach(line => {
-          const parts = line.split(/-->|---/).map(part => part.trim().replace(/^[A-Za-z0-9_-]+(?:\[|\(|\{)?/, '').replace(/[\]\)\}]+$/, '').trim()).filter(Boolean);
-          parts.forEach(part => { if (!seen.has(part)) { seen.add(part); nodes.push(part.slice(0, 90)); } });
-        });
-        if (!nodes.length) { diagramPreview.textContent = '图表源码还没有可预览的流程节点。'; return; }
-        nodes.forEach((label, index) => {
-          const node = document.createElement('span'); node.className = 'agent-diagram-node'; node.textContent = label;
-          diagramPreview.appendChild(node);
-          if (index < nodes.length - 1) { const arrow = document.createElement('span'); arrow.className = 'agent-diagram-arrow'; arrow.textContent = '→'; diagramPreview.appendChild(arrow); }
-        });
+        if (!nodes.size) { diagramPreview.textContent = '图表源码还没有可预览的流程节点。'; return; }
+        const entries = [...nodes.entries()]; const width = 760; const rowHeight = 86; const height = Math.max(160, Math.ceil(entries.length / 2) * rowHeight + 40);
+        const positions = new Map(entries.map(([id], index) => [id, { x: 240 + (index % 2) * 280, y: 58 + Math.floor(index / 2) * rowHeight }]));
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', `0 0 ${width} ${height}`); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'Coding Agent 生成的流程图'); svg.classList.add('agent-diagram-image');
+        const defs = document.createElementNS(svg.namespaceURI, 'defs'); const marker = document.createElementNS(svg.namespaceURI, 'marker');
+        marker.setAttribute('id', 'agent-arrow'); marker.setAttribute('viewBox', '0 0 10 10'); marker.setAttribute('refX', '9'); marker.setAttribute('refY', '5'); marker.setAttribute('markerWidth', '7'); marker.setAttribute('markerHeight', '7'); marker.setAttribute('orient', 'auto');
+        const arrow = document.createElementNS(svg.namespaceURI, 'path'); arrow.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z'); arrow.setAttribute('fill', '#4386a4'); marker.appendChild(arrow); defs.appendChild(marker); svg.appendChild(defs);
+        edges.forEach(([from, to]) => { const a = positions.get(from); const b = positions.get(to); const line = document.createElementNS(svg.namespaceURI, 'line'); line.setAttribute('x1', String(a.x)); line.setAttribute('y1', String(a.y + 21)); line.setAttribute('x2', String(b.x)); line.setAttribute('y2', String(b.y - 21)); line.setAttribute('stroke', '#4386a4'); line.setAttribute('stroke-width', '2'); line.setAttribute('marker-end', 'url(#agent-arrow)'); svg.appendChild(line); });
+        entries.forEach(([id, label]) => { const point = positions.get(id); const group = document.createElementNS(svg.namespaceURI, 'g'); const rect = document.createElementNS(svg.namespaceURI, 'rect'); rect.setAttribute('x', String(point.x - 105)); rect.setAttribute('y', String(point.y - 22)); rect.setAttribute('width', '210'); rect.setAttribute('height', '44'); rect.setAttribute('rx', '5'); rect.setAttribute('fill', '#edf7fb'); rect.setAttribute('stroke', '#4386a4'); const text = document.createElementNS(svg.namespaceURI, 'text'); text.setAttribute('x', String(point.x)); text.setAttribute('y', String(point.y + 5)); text.setAttribute('text-anchor', 'middle'); text.setAttribute('fill', '#18394a'); text.setAttribute('font-size', '14'); text.textContent = label; group.append(rect, text); svg.appendChild(group); });
+        diagramPreview.appendChild(svg);
       };
       const invokeTool = async (tool_name, arguments, confirmed = false) => request(`/agent/sessions/${state.agentSessionId}/tools`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tool_name, arguments, confirmed }) });
       const refreshFiles = async () => {

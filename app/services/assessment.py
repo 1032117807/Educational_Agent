@@ -350,6 +350,8 @@ class QuestionService:
                 question = session.get(Question, attempt.question_id)
                 if question:
                     rows.append({
+                        "question_id": question.id,
+                        "knowledge_point_id": question.knowledge_point_id,
                         "prompt": question.prompt, "response": attempt.response,
                         "answer": question.answer, "correct": attempt.correct,
                         "explanation": question.explanation,

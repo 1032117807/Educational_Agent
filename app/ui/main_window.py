@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from sqlalchemy import select
 
 from ai.factory import (
     create_grounded_qa_service,
@@ -26,6 +27,7 @@ from app.core.config import AppSettings
 from app.services.learning import LearningService
 from app.services.agent_sessions import AgentSessionService
 from app.services.agent_workflows import AgentWorkflowService
+from app.models import KnowledgePoint, Question
 from app.services.agent_skills import AgentSkillCatalog
 from app.services.agent_memory import AgentMemoryService
 from app.services.domain import (
@@ -502,8 +504,30 @@ class MainWindow(QMainWindow):
     ) -> None:
         self.navigate(4)
         practice_page.tabs.setCurrentIndex(0)
-        if practice_page.start_practice_for_questions(question_ids):
-            agent_page.finish_workflow_practice(workflow_id)
+        def adaptive_round(session_id: int) -> None:
+            workflow_service = agent_page.workflow_factory()
+            answers = self.questions.session_results(session_id)
+            def assess(state):
+                with self.service.database.session() as db:
+                    mastery = {p.id: p.mastery for p in db.scalars(select(KnowledgePoint).where(KnowledgePoint.course_id == workflow_service.get(workflow_id).course_id))}
+                return [{**item, "mastery": mastery.get(item.get("knowledge_point_id"), 100 if item.get("correct") else 0)} for item in answers]
+            def remediate(state):
+                weak_ids = {item.get("knowledge_point_id") for item in state.get("weak_points", []) if item.get("knowledge_point_id")}
+                with self.service.database.session() as db:
+                    rows = list(db.scalars(select(Question).where(Question.knowledge_point_id.in_(weak_ids), ~Question.archived).limit(5))) if weak_ids else []
+                return {"practice_question_ids": [row.id for row in rows]}
+            outcome = workflow_service.run_adaptive_loop(
+                workflow_id, answers=answers, assess=assess, remediate=remediate,
+                advance=lambda state: {"completed_topics": [item["knowledge_point_id"] for item in state.get("answers", []) if item.get("knowledge_point_id")]},
+                revise_plan=lambda state: {"weak_point_ids": [item.get("knowledge_point_id") for item in state.get("weak_points", [])]},
+                negotiate=lambda state: {"decision": "remediate" if state.get("weak_points") else "advance", "agents": ["assessment", "practice", "planning"]},
+            )
+            if outcome.payload.get("adaptive_status") == "awaiting_practice" and outcome.payload.get("adaptive_question_ids"):
+                practice_page.start_adaptive_practice_for_questions(outcome.payload["adaptive_question_ids"], adaptive_round)
+            else:
+                agent_page.finish_workflow_practice(workflow_id)
+        if practice_page.start_adaptive_practice_for_questions(question_ids, adaptive_round):
+            return
 
     def _open_agent_window(
         self, practice_page: PracticePage, analytics_page: AnalyticsPage

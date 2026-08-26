@@ -2,6 +2,16 @@ const state = { token: sessionStorage.getItem('learning_access_token') || '', re
 const $ = selector => document.querySelector(selector);
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 function flash(message) { const root = $('#flash'); root.textContent = message; root.classList.remove('hidden'); setTimeout(() => root.classList.add('hidden'), 2800); }
+function friendlyError(detail) {
+  if (Array.isArray(detail)) return detail.map(item => item.msg || '输入内容不符合要求').join('；');
+  const messages = {
+    'email already registered': '该邮箱已注册，请切换到“登录”并使用原密码登录。',
+    'invalid credentials': '邮箱或密码错误，请确认后重试。',
+    'user has no organization': '该账号尚未加入任何工作区。',
+    'organization admin role required': '当前账号没有管理员权限。',
+  };
+  return messages[String(detail || '')] || String(detail || '请求失败，请稍后重试。');
+}
 function storeTokens(tokens) { state.token = tokens.access_token; state.refreshToken = tokens.refresh_token; sessionStorage.setItem('learning_access_token', state.token); sessionStorage.setItem('learning_refresh_token', state.refreshToken); }
 function agentSessionStorageKey() { return state.user?.tenant_id ? `learning_agent_session_id:${state.user.tenant_id}` : ''; }
 function restoreScopedAgentSession() { const key = agentSessionStorageKey(); state.agentSessionId = key ? (Number(localStorage.getItem(key)) || null) : null; }
@@ -29,16 +39,17 @@ function restoreRememberedResourceJob() {
   } catch (_) { localStorage.removeItem(key); }
 }
 async function refreshAccessToken() { if (!state.refreshToken) throw new Error('Session expired'); if (!state.refreshing) state.refreshing = fetch('/v1/auth/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: state.refreshToken }) }).then(async response => { if (!response.ok) throw new Error('Session expired'); return response.json(); }).then(storeTokens).finally(() => { state.refreshing = null; }); return state.refreshing; }
-async function api(path, options = {}, retried = false) { const headers = { ...(options.headers || {}) }; if (state.token) headers.Authorization = `Bearer ${state.token}`; if (options.body && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json'; const response = await fetch(`/v1${path}`, { ...options, headers }); if (response.status === 401 && !retried && path !== '/auth/refresh') { try { await refreshAccessToken(); return api(path, options, true); } catch (error) { showAuth(); throw error; } } if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || 'Request failed'); } return response.status === 204 ? null : response.json(); }
+async function api(path, options = {}, retried = false) { const headers = { ...(options.headers || {}) }; if (state.token) headers.Authorization = `Bearer ${state.token}`; if (options.body && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json'; const response = await fetch(`/v1${path}`, { ...options, headers }); if (response.status === 401 && !retried && path !== '/auth/refresh' && state.refreshToken) { try { await refreshAccessToken(); return api(path, options, true); } catch (error) { showAuth(); throw error; } } if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(friendlyError(body.detail)); } return response.status === 204 ? null : response.json(); }
 function courseOptions(emptyLabel = '未选择课程') { return `<option value="">${emptyLabel}</option>${state.courses.map(course => `<option value="${course.id}">${escapeHtml(course.name)}</option>`).join('')}`; }
 async function ensureCourses() { if (!state.courses.length) state.courses = await api('/courses'); }
 function showAuth() { resetWorkspaceState(); state.token = ''; state.refreshToken = ''; state.user = null; sessionStorage.removeItem('learning_access_token'); sessionStorage.removeItem('learning_refresh_token'); $('#app-view').classList.add('hidden'); $('#auth-view').classList.remove('hidden'); }
 function showApp() { restoreScopedAgentSession(); $('#auth-view').classList.add('hidden'); $('#app-view').classList.remove('hidden'); $('#user-label').textContent = state.user.display_name || state.user.email; $('#org-label').textContent = `${state.user.tenant_id.slice(0, 8)} · ${state.user.role}`; openView('today'); }
-async function authenticate(path, form) { const tokens = await api(path, { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); resetWorkspaceState(); storeTokens(tokens); state.user = await api('/me'); showApp(); }
+async function authenticate(path, form) { const tokens = await api(path, { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); resetWorkspaceState(); storeTokens(tokens); state.user = await api('/me'); showApp(); flash(path === '/auth/register' ? '工作区创建成功，当前账号已成为管理员。' : '登录成功。'); }
 
 document.querySelectorAll('[data-auth-tab]').forEach(button => button.onclick = () => { document.querySelectorAll('[data-auth-tab]').forEach(item => item.classList.toggle('active', item === button)); $('#login-form').classList.toggle('hidden', button.dataset.authTab !== 'login'); $('#register-form').classList.toggle('hidden', button.dataset.authTab !== 'register'); $('#auth-error').textContent = ''; });
-$('#login-form').onsubmit = async event => { event.preventDefault(); try { await authenticate('/auth/login', event.target); } catch (error) { $('#auth-error').textContent = error.message; } };
-$('#register-form').onsubmit = async event => { event.preventDefault(); try { await authenticate('/auth/register', event.target); } catch (error) { $('#auth-error').textContent = error.message; } };
+function bindAuthSubmit(formId, path, pendingText) { $(formId).onsubmit = async event => { event.preventDefault(); const form = event.target; const button = form.querySelector('button[type=submit]'); const original = button.textContent; $('#auth-error').textContent = ''; button.disabled = true; button.textContent = pendingText; try { await authenticate(path, form); } catch (error) { $('#auth-error').textContent = error.message || '请求失败，请稍后重试。'; } finally { button.disabled = false; button.textContent = original; } }; }
+bindAuthSubmit('#login-form', '/auth/login', '正在登录…');
+bindAuthSubmit('#register-form', '/auth/register', '正在创建…');
 document.querySelectorAll('.sidebar .nav-item[data-view]').forEach(button => button.onclick = () => openView(button.dataset.view));
 function openView(view) { const target = $(`#${view}-view`); if (!target) return; document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === view)); document.querySelectorAll('.view').forEach(item => item.classList.add('hidden')); target.classList.remove('hidden'); const title = ({ today: '今日学习', dashboard: '今日学习', courses: '我的课程', tasks: '学习任务', goals: '学习计划', practice: '练习与复习', mistakes: '错题本', analytics: '学习分析', vocabulary: '词汇复习', resources: '学习资料库', ai: 'AI 学习助手', members: '团队成员' })[view] || 'Learning Space'; document.title = `${title} · Learning Space`; void loadCurrentView(view); }
 async function loadCurrentView(activeView) { const view = activeView || document.querySelector('.sidebar .nav-item.active')?.dataset.view; const loads = { today: async () => { await loadToday(); await loadTodayReminders(); }, dashboard: async () => { await loadToday(); await loadTodayReminders(); }, courses: loadCourses, tasks: loadTasks, goals: loadGoals, practice: async () => { await loadPractice(); await loadQuestionDrafts(); }, mistakes: loadMistakes, analytics: loadAnalytics, vocabulary: loadVocabulary, resources: async () => { await loadResources(); await loadKnowledgeDrafts(); }, ai: loadAiCenter, members: loadMembers }; const load = loads[view]; if (typeof load === 'function') await load(); }
@@ -175,6 +186,34 @@ window.addEventListener('learning-data-updated', () => {
   if (view) void loadCurrentView(view);
   void loadDashboard();
 });
+
+// Owner/admin-only usage administration. The server remains the authority;
+// hiding this navigation is strictly a usability measure, not access control.
+async function loadTokenUsage(days = 30) {
+  const data = await api(`/organization/usage?days=${days}`);
+  const totals = data.totals || {};
+  $('#usage-metrics').innerHTML = [
+    ['Total tokens', Number(totals.total_tokens || 0).toLocaleString()],
+    ['Input tokens', Number(totals.input_tokens || 0).toLocaleString()],
+    ['Output tokens', Number(totals.output_tokens || 0).toLocaleString()],
+    ['AI runs', (data.users || []).reduce((total, user) => total + Number(user.run_count || 0), 0).toLocaleString()],
+  ].map(([label, value]) => `<article class="metric"><div class="label">${label}</div><div class="value">${value}</div></article>`).join('');
+  $('#usage-list').innerHTML = (data.users || []).map(user => `<article class="list-row"><div><strong>${escapeHtml(user.display_name || user.email)}</strong><div class="task-meta">${escapeHtml(user.email)} · ${Number(user.run_count || 0)} AI runs</div></div><div class="task-meta">Input ${Number(user.input_tokens || 0).toLocaleString()} · Output ${Number(user.output_tokens || 0).toLocaleString()}<br><strong>${Number(user.total_tokens || 0).toLocaleString()} tokens</strong></div></article>`).join('') || '<p class="task-meta">No AI usage recorded in this period.</p>';
+}
+function setupUsageAdministration() {
+  const allowed = ['owner', 'admin'].includes(state.user?.role);
+  $('#usage-nav')?.classList.toggle('hidden', !allowed);
+  if (!allowed) return;
+  $('#usage-nav').onclick = async () => {
+    document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.id === 'usage-nav'));
+    document.querySelectorAll('.view').forEach(item => item.classList.add('hidden'));
+    $('#usage-view').classList.remove('hidden');
+    await loadTokenUsage(30);
+  };
+  document.querySelectorAll('.usage-range').forEach(button => button.onclick = () => loadTokenUsage(Number(button.dataset.usageDays)));
+}
+const originalShowApp = showApp;
+showApp = function() { originalShowApp(); setupUsageAdministration(); };
 $('#task-course').onchange = renderTaskKnowledgeOptions;
 $('#task-form').onsubmit = async event => { event.preventDefault(); try { const data = Object.fromEntries(new FormData(event.target)); data.duration_minutes = Number(data.duration_minutes); data.course_id = data.course_id ? Number(data.course_id) : null; data.knowledge_point_id = data.knowledge_point_id ? Number(data.knowledge_point_id) : null; await api('/tasks', { method: 'POST', body: JSON.stringify(data) }); event.target.reset(); event.target.classList.add('hidden'); renderTaskKnowledgeOptions(); flash('Task created'); loadTasks(); } catch (error) { flash(error.message); } };
 const openCourseBase = openCourse;

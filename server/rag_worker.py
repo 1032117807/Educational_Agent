@@ -15,6 +15,7 @@ from app.agent_runtime import AgentBudget
 from ai.retrieval.agentic import AgenticRAG
 from server.rag_retriever import TenantPgVectorRetriever
 from ai.gateways.rerank import Reranker
+from ai.usage import response_token_usage
 from server.tenant_session import set_session_tenant
 
 
@@ -72,6 +73,7 @@ def retrieve_rag_evidence(
             retrieval_observations = []
         answer = ""
         generation_status = "evidence_only"
+        input_tokens = output_tokens = 0
         if chat_model is not None and hits:
             evidence = "\n\n".join(
                 f"[{number}] {hit.content[:1500]}" for number, hit in enumerate(hits, start=1)
@@ -82,6 +84,7 @@ def retrieve_rag_evidence(
                 f"问题：{question}\n\n资料：\n{evidence}"
             )
             response = chat_model.invoke(prompt)
+            input_tokens, output_tokens = response_token_usage(response)
             content = response.content
             candidate = content if isinstance(content, str) else str(content)
             if has_valid_citations(candidate, len(hits)):
@@ -89,12 +92,15 @@ def retrieve_rag_evidence(
                 generation_status = "generated"
         run = AIRun(
             tenant_id=tenant_id,
+            user_id=str(payload.get("user_id") or "") or None,
             run_uuid=str(uuid4()),
             feature="document_qa_retrieval",
             status="completed",
             provider=chat_provider if generation_status == "generated" else "pgvector",
             model_name=chat_model_name if generation_status == "generated" else model_name,
             prompt_version="saas-rag-grounded-v1" if generation_status == "generated" else "saas-rag-retrieval-v1",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             input_json=json.dumps({"question": question, "course_id": course_id}, ensure_ascii=False),
             output_json=json.dumps({
                 "mode": generation_status,

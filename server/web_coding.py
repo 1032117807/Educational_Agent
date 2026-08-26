@@ -23,7 +23,7 @@ def propose_web_code(*, model: BaseChatModel, request: str, payload: dict[str, A
     """Produce a temporary program which can only use the supplied payload."""
     prompt = (
         "You are the Web Coding Agent for a learning application. Return the MetaCodeProposal schema. "
-        "Write concise Chinese explanation and keep expected_output within 300 Chinese characters. For diagram requests, set artifact_type=mermaid and return only valid Mermaid flowchart/sequence/class syntax in mermaid_code; do not generate Python for it. "
+        "Write concise Chinese explanation and keep expected_output within 300 Chinese characters. For diagram, chart, or visualization requests, set artifact_type=mermaid and return only valid Mermaid flowchart/sequence/class syntax in mermaid_code; do not generate Python for it. The Web client renders this as an inline SVG image in the chat. "
         "For computation requests, set artifact_type=python. The Python program may use only json and the preloaded payload dict, "
         "must print one JSON result, and must not access files, network, subprocesses, dynamic imports, eval, or exec. "
         "Set publishable=false: deployed Web containers do not persist new Skills at runtime.\n"

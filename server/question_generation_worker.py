@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.models import AICitation, AIRun, BackgroundJob, KnowledgePoint, Question, QuestionDraft, QuestionDraftCitation
 from server.rag_retriever import TenantPgVectorRetriever
 from ai.gateways.rerank import Reranker
+from ai.usage import response_token_usage
 from server.tenant_session import set_session_tenant
 
 
@@ -144,6 +145,7 @@ def generate_grounded_questions(
             f"Allowed kinds: {', '.join(kinds)}.\n\nEvidence:\n{evidence}"
         )
         response = chat_model.invoke(prompt)
+        input_tokens, output_tokens = response_token_usage(response)
         decoded = _json_object(response.content)
         raw_questions = decoded.get("questions")
         if not isinstance(raw_questions, list) or len(raw_questions) != count:
@@ -152,12 +154,15 @@ def generate_grounded_questions(
 
         run = AIRun(
             tenant_id=tenant_id,
+            user_id=str(payload.get("user_id") or "") or None,
             run_uuid=str(uuid4()),
             feature="question_generation",
             status="completed",
             provider=chat_provider,
             model_name=chat_model_name,
             prompt_version="saas-grounded-question-generation-v1",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             input_json=json.dumps({"request": request, "count": count, "difficulty": difficulty, "kinds": kinds}, ensure_ascii=False),
             output_json=json.dumps({"count": len(questions), "question_ids": [], "evidence_count": len(hits)}, ensure_ascii=False),
             course_id=course_id,

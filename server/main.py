@@ -9,7 +9,7 @@ from starlette.responses import JSONResponse
 from starlette.staticfiles import StaticFiles
 
 from server.config import get_server_settings
-from server.db import check_database
+from server.db import check_database, ensure_development_schema
 from server.routers import router
 from server.rate_limit import RedisRateLimiter, rate_limit_response
 from server.storage import S3ObjectStorage
@@ -17,6 +17,7 @@ from server.storage import S3ObjectStorage
 
 def create_app() -> FastAPI:
     settings = get_server_settings()
+    ensure_development_schema(settings)
     app = FastAPI(title="Personal Learning API", version="1.0.0")
     app.add_middleware(
         CORSMiddleware,
