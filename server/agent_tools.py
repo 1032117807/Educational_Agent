@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 import requests
+import base64
 from app.agent_runtime import search_capabilities
 from app.agent_runtime.observations import observe_failure, observe_success
 from app.services.agent_skills import AgentSkillCatalog
@@ -53,6 +54,8 @@ class WebAgentToolExecutor:
             return {"results": self.search_web(str(arguments.get("query", "")))}
         if name in {"web.fetch", "fetch_public_url"}:
             return {"content": self.fetch_public_url(str(arguments.get("url", "")))}
+        if name in {"web.browser_screenshot", "browser_screenshot"}:
+            return self.browser_screenshot(arguments)
         if name == "list_workspace_files":
             return {"files": self.list_workspace_files(str(arguments.get("relative_path", ".")), int(arguments.get("limit", 100)))}
         if name == "read_workspace_file":
@@ -167,6 +170,57 @@ class WebAgentToolExecutor:
             if content_type not in {"text/plain", "text/html", "application/json"}:
                 raise ValueError(f"unsupported response type: {content_type}")
             return response.read(100_000).decode("utf-8", errors="replace")
+
+    def browser_screenshot(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Capture a public page after a small, read-only action sequence.
+
+        Authentication, downloads, uploads, scripts, and arbitrary selectors are
+        intentionally unsupported. The browser dependency is optional so the
+        core SaaS service can still start without a browser image installed.
+        """
+        url = str(arguments.get("url", "")).strip()
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("browser automation only accepts public HTTPS URLs")
+        actions = arguments.get("actions", [])
+        if not isinstance(actions, list) or len(actions) > 8:
+            raise ValueError("at most 8 read-only browser actions are allowed")
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            raise RuntimeError("browser automation is not installed in this deployment") from exc
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                page = browser.new_page(viewport={"width": 1280, "height": 800}, device_scale_factor=1)
+                page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+                for action in actions:
+                    if not isinstance(action, dict):
+                        raise ValueError("browser actions must be objects")
+                    kind = str(action.get("type", "")).lower()
+                    if kind == "wait":
+                        page.wait_for_timeout(min(max(int(action.get("milliseconds", 500)), 0), 3000))
+                    elif kind == "scroll":
+                        page.mouse.wheel(0, min(max(int(action.get("pixels", 500)), -1500), 1500))
+                    elif kind == "click":
+                        selector = str(action.get("selector", ""))
+                        if not selector or any(token in selector for token in ("javascript:", "xpath=", "..")):
+                            raise ValueError("only simple CSS selectors are allowed")
+                        page.locator(selector).first.click(timeout=5000)
+                    elif kind == "type":
+                        selector = str(action.get("selector", "")); value = str(action.get("text", ""))
+                        if not selector or len(value) > 1000 or any(token in selector for token in ("javascript:", "xpath=", "..")):
+                            raise ValueError("invalid type action")
+                        page.locator(selector).first.fill(value, timeout=5000)
+                    else:
+                        raise ValueError(f"unsupported browser action: {kind}")
+                screenshot = page.screenshot(type="png", full_page=False)
+                title = page.title()
+                final_url = page.url
+                browser.close()
+        except Exception as exc:
+            raise RuntimeError(f"browser screenshot failed: {exc}") from exc
+        return {"url": final_url, "title": title[:300], "mime_type": "image/png", "image_base64": base64.b64encode(screenshot).decode("ascii")}
 
     def list_workspace_files(self, relative_path: str, limit: int) -> list[str]:
         root = self._path(relative_path)

@@ -25,6 +25,8 @@ COPY requirements.saas.txt ./
 # Keep transient registry failures from making an otherwise reproducible
 # release build fail on the first slow package download.
 RUN pip install --no-cache-dir --retries 5 --timeout 120 -r requirements.saas.txt
+# Browser screenshots use a headless Chromium with no host browser access.
+RUN playwright install --with-deps chromium
 
 COPY pyproject.toml README.md ./
 COPY app ./app

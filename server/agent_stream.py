@@ -585,6 +585,10 @@ def _collect_runtime_context(
         }
         if "learning_data.read_snapshot" not in observed:
             return AgentTurn("Read tenant-scoped learning evidence", "tool", "learning_data.read_snapshot", {"course_id": course_id})
+        if _requests_browser_screenshot(message) and "web.browser_screenshot" not in observed:
+            match = re.search(r"https://[^\s)]+", message)
+            if match:
+                return AgentTurn("Open the requested public page and capture a screenshot", "tool", "web.browser_screenshot", {"url": match.group(0), "actions": []})
         if needs_web and "web.search" not in observed:
             return AgentTurn("Search public sources requested by the learner", "tool", "web.search", {"query": research_query})
         return AgentTurn("Evidence collection complete", "final", answer="")
@@ -788,6 +792,11 @@ def stream_agent_reply(*, session_factory, tenant_id: str, user_id: str, session
                 error = observation.get("error") or {}
                 yield _event("activity", {"kind": "tool", "state": "failed", "label": "Tool: web search", "detail": str(error.get("message", error))})
                 yield _event("tool", {"name": tool_name, "state": "failed", "error": str(error.get("message", error))})
+        elif tool_name == "web.browser_screenshot":
+            if ok and isinstance(observation.get("data"), dict):
+                yield _event("tool", {"name": tool_name, "state": "completed", "summary": observation["data"]})
+            else:
+                yield _event("tool", {"name": tool_name, "state": "failed", "summary": {"error": observation.get("error")}})
     if selected_source_url is not None:
         # The source-choice control is an explicit request to use this URL.
         # The import endpoint resolves an HTML catalogue to a real supported
@@ -1001,6 +1010,11 @@ def _requests_web_search(message: str) -> bool:
         "网络资料", "在线资料", "下载资料", "自动下载", "自动导入", "pdf学习资料", "pdf资料", "学习资料", "教材", "课本", "习题答案", "课后答案",
         "web search", "search the web",
     ))
+
+
+def _requests_browser_screenshot(message: str) -> bool:
+    value = message.casefold()
+    return any(term in value for term in ("截图", "截取网页", "打开网页操作", "操作浏览器", "浏览器截图", "网页截图", "screenshot"))
 
 
 def _memory_candidate(message: str, course_id: int | None) -> dict[str, object] | None:

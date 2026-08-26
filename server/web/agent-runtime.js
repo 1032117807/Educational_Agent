@@ -123,6 +123,17 @@
     return message;
   };
 
+  const appendBrowserScreenshot = payload => {
+    const data = payload?.summary || {};
+    if (!data.image_base64) return;
+    const root = document.querySelector('#agent-messages'); if (!root) return;
+    const message = document.createElement('article'); message.className = 'agent-message assistant agent-browser-screenshot';
+    const title = document.createElement('strong'); title.textContent = `网页截图：${data.title || data.url || '公开网页'}`;
+    const image = document.createElement('img'); image.src = `data:${data.mime_type || 'image/png'};base64,${data.image_base64}`; image.alt = title.textContent; image.loading = 'lazy';
+    const source = document.createElement('small'); source.textContent = data.url || '';
+    message.append(title, image, source); root.appendChild(message); root.scrollTop = root.scrollHeight;
+  };
+
   const applySourceSummaries = (payload, rootOverride = null) => {
     const root = rootOverride || document;
     (payload?.items || []).forEach(item => {
@@ -504,6 +515,7 @@
           if (name === 'activity') appendActivity(payload);
           if (name === 'tool' && payload.job_id) watchJob(payload.job_id);
           if (name === 'tool' && payload.name === 'web.search') appendSearchResults(payload);
+          if (name === 'tool' && payload.name === 'web.browser_screenshot') appendBrowserScreenshot(payload);
           if (name === 'tool' && payload.state === 'failed') appendToolFailure(payload);
           if (name === 'sources') applySourceSummaries(payload);
           if (name === 'auto_import') autoImportMaterials(payload);

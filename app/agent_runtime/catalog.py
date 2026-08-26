@@ -69,6 +69,7 @@ TOOL_CATALOG = (
     AgentTool("agent.remember", "Save a confirmed learning memory", "cloud_sandbox", True),
     AgentTool("web.search", "Search public web sources", "cloud_sandbox", skill_name="research"),
     AgentTool("web.fetch", "Fetch an allowed public URL", "cloud_sandbox", skill_name="research"),
+    AgentTool("web.browser_screenshot", "Open a public web page, perform bounded read-only browser actions, and capture a screenshot", "cloud_sandbox", skill_name="research", timeout_seconds=45),
     AgentTool("mcp.list_workspace_files", "List files in the client workspace", "cloud_sandbox", skill_name="coding"),
     AgentTool("mcp.read_workspace_file", "Read a file in the client workspace", "cloud_sandbox", skill_name="coding"),
     AgentTool("mcp.write_workspace_file", "Write an allowlisted client workspace file", "cloud_sandbox", True, "coding"),
