@@ -71,6 +71,8 @@ def validate(values: dict[str, str]) -> list[str]:
         errors.append("CORS_ORIGINS must use HTTPS origins in production")
     if not values.get("DEPLOYMENT_DOMAIN", "").strip() or not values.get("CADDY_ACME_EMAIL", "").strip():
         errors.append("DEPLOYMENT_DOMAIN and CADDY_ACME_EMAIL are required for the HTTPS entry point")
+    if values.get("PUBLIC_REGISTRATION_ENABLED", "true").lower() not in {"true", "false", "1", "0", "yes", "no", "on", "off"}:
+        errors.append("PUBLIC_REGISTRATION_ENABLED must be a boolean")
 
     if values.get("LEARNING_AI_ENABLED", "false").lower() in {"1", "true", "yes", "on"} and _placeholder(values.get("LEARNING_AI_API_KEY", "")):
         errors.append("LEARNING_AI_API_KEY is required when LEARNING_AI_ENABLED is true")

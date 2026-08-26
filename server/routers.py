@@ -157,6 +157,12 @@ class OrganizationMemberRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     role: str = Field(default="member", pattern="^(admin|member)$")
 
+class OrganizationUserCreateRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=10, max_length=200)
+    display_name: str = Field(default="", max_length=160)
+    role: str = Field(default="member", pattern="^(admin|member)$")
+
 
 class OrganizationMemberRoleRequest(BaseModel):
     role: str = Field(pattern="^(admin|member)$")
@@ -409,6 +415,8 @@ def record_learning_event(
     ))
 @router.post("/auth/register", status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, db: DbSession) -> dict[str, str]:
+    if not get_server_settings().public_registration_enabled:
+        raise HTTPException(status_code=403, detail="public registration is disabled; ask an organization administrator to create your account")
     email = str(payload.email).lower()
     if db.scalar(select(User).where(User.email == email)): raise HTTPException(status_code=409, detail="email already registered")
     user_id, organization_id = str(uuid4()), str(uuid4())
@@ -540,6 +548,23 @@ def add_organization_member(
     record_audit(db, context, "organization.member_add", "user", user.id, {"role": payload.role})
     db.commit()
     return {"user_id": user.id, "email": user.email, "role": member.role}
+
+
+@router.post("/organization/users", status_code=status.HTTP_201_CREATED)
+def create_organization_user(
+    payload: OrganizationUserCreateRequest, context: CurrentContext, db: DbSession
+) -> dict[str, object]:
+    require_org_admin(context)
+    email = payload.email.strip().lower()
+    if db.scalar(select(User).where(User.email == email)) is not None:
+        raise HTTPException(status_code=409, detail="email already registered")
+    user = User(id=str(uuid4()), email=email, password_hash=hash_password(payload.password), display_name=payload.display_name.strip())
+    db.add(user); db.flush()
+    member = OrganizationMember(organization_id=context.tenant_id, user_id=user.id, role=payload.role)
+    db.add(member)
+    record_audit(db, context, "organization.user_create", "user", user.id, {"role": payload.role})
+    db.commit()
+    return {"user_id": user.id, "email": user.email, "display_name": user.display_name, "role": member.role}
 
 
 @router.patch("/organization/members/{user_id}")

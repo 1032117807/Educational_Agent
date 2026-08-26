@@ -117,6 +117,7 @@ def create_app() -> FastAPI:
             "object_storage_configured": bool(settings.object_storage_endpoint and settings.object_storage_access_key and settings.object_storage_secret_key),
             "chat_model_configured": bool(ai.enabled and ai.api_key.strip()),
             "rate_limit_enabled": settings.rate_limit_enabled,
+            "public_registration_enabled": settings.public_registration_enabled,
             "web_coding_enabled": settings.web_coding_enabled,
             "embedding_mode": "local" if ai.embedding_local_files_only else "managed_or_downloaded",
             "embedding_model": ai.embedding_model,
