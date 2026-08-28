@@ -34,7 +34,7 @@ class ServerSettings(BaseSettings):
     auth_rate_limit_requests: int = Field(default=10, ge=1, le=1000)
     auth_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
-    public_registration_enabled: bool = True
+    public_registration_enabled: bool = False
     # Running generated code requires the API container to access Docker. Keep
     # this opt-in so the default SaaS deployment does not expose the host
     # Docker socket to an internet-facing application.

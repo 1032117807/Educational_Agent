@@ -415,23 +415,7 @@ def record_learning_event(
     ))
 @router.post("/auth/register", status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, db: DbSession) -> dict[str, str]:
-    if not get_server_settings().public_registration_enabled:
-        raise HTTPException(status_code=403, detail="public registration is disabled; ask an organization administrator to create your account")
-    email = str(payload.email).lower()
-    if db.scalar(select(User).where(User.email == email)): raise HTTPException(status_code=409, detail="email already registered")
-    user_id, organization_id = str(uuid4()), str(uuid4())
-    db.add_all([
-        Organization(id=organization_id, name=payload.organization_name, slug=f"org-{organization_id[:8]}"),
-        User(id=user_id, email=email, password_hash=hash_password(payload.password), display_name=payload.display_name),
-    ])
-    # The membership has foreign keys to both records. Flush them before
-    # creating it so PostgreSQL cannot choose an invalid insert order.
-    db.flush()
-    db.add(OrganizationMember(organization_id=organization_id, user_id=user_id, role="owner"))
-    refresh_raw, refresh_digest = create_refresh_token()
-    db.add(RefreshToken(id=str(uuid4()), user_id=user_id, token_hash=refresh_digest, expires_at=datetime.now() + timedelta(days=get_server_settings().refresh_token_days)))
-    db.commit()
-    return {"access_token": create_access_token(user_id=user_id, organization_id=organization_id, settings=get_server_settings()), "refresh_token": refresh_raw, "token_type": "bearer"}
+    raise HTTPException(status_code=403, detail="创建账号功能已关闭，请联系管理员 QQ：1032117807")
 @router.post("/auth/login")
 def login(payload: LoginRequest, db: DbSession) -> dict[str, str]:
     user = db.scalar(select(User).where(User.email == str(payload.email).lower(), User.is_active.is_(True)))

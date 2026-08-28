@@ -15,9 +15,9 @@
   <main id="auth-view" class="auth-shell">
     <section class="brand-panel"><p class="eyebrow">LEARNING SPACE</p><h1>Learning Space</h1><p>Organize courses, plans, and reflection for your team.</p></section>
     <section class="auth-panel">
-      <div class="tab-row"><button class="tab active" data-auth-tab="login">Sign in</button><button class="tab" data-auth-tab="register">Create workspace</button></div>
+      <div class="tab-row"><button class="tab active" type="button">Sign in</button></div>
       <form id="login-form" class="form-stack"><label>Email<input name="email" type="email" autocomplete="email" required></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="primary" type="submit">Sign in</button></form>
-      <form id="register-form" class="form-stack hidden"><label>Workspace name<input name="organization_name" maxlength="160" required></label><label>Display name<input name="display_name" maxlength="160"></label><label>Email<input name="email" type="email" autocomplete="email" required></label><label>Password<input name="password" type="password" minlength="10" autocomplete="new-password" required></label><button class="primary" type="submit">Create workspace</button></form>
+      <p class="auth-registration-notice">创建账号功能已关闭，请联系管理员 QQ：1032117807。</p>
       <p id="auth-error" class="error" role="alert"></p>
     </section>
   </main>
