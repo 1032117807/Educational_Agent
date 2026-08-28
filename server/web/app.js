@@ -177,7 +177,6 @@ $('#logout').onclick = async () => { try { if (state.refreshToken) await fetch('
 ensureTutorModeBar();
 const allAnalyticsButton = document.createElement('button'); allAnalyticsButton.type = 'button'; allAnalyticsButton.className = 'secondary analytics-range'; allAnalyticsButton.dataset.days = 'all'; allAnalyticsButton.textContent = 'All time'; allAnalyticsButton.onclick = () => loadAnalytics('all'); document.querySelector('.analytics-range[data-days="30"]')?.insertAdjacentElement('afterend', allAnalyticsButton);
 $('#generate-questions').onclick = async () => { try { await prepareQuestionGenerationForm(); $('#question-generation-form').classList.remove('hidden'); } catch (error) { flash(error.message); } };
-$('#question-generation-form').onsubmit = async event => { event.preventDefault(); try { const data = questionGenerationPayload(event.target); const result = await api('/ai/question-generation/jobs', { method: 'POST', body: JSON.stringify(data) }); event.target.classList.add('hidden'); flash('AI question generation submitted'); watchGenerationJob(result.job_id); } catch (error) { flash(error.message); } };
 if (state.token) api('/me').then(user => { state.user = user; showApp(); }).catch(showAuth);
 window.addEventListener('learning-data-updated', () => {
   const view = document.querySelector('.sidebar .nav-item.active')?.dataset.view;
