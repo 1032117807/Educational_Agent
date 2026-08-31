@@ -17,6 +17,7 @@ app/PersonalLearningDesktop/
 data/
 !data/.gitkeep
 models/
+!app/models/identity.py
 # Local configuration and secrets
 .env
 .env.*
