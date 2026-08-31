@@ -20,6 +20,8 @@ data
 dist
 app/PersonalLearningDesktop
 models
+!app/models/
+!app/models/*.py
 *.egg-info
 nuitka-crash-report.xml
 .docker-codex
