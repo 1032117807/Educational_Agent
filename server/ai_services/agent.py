@@ -35,7 +35,13 @@ def is_general_creation_request(message: str) -> bool:
         "\u753b\u56fe", "\u7ed8\u56fe", "\u6d41\u7a0b\u56fe", "\u793a\u610f\u56fe", "\u601d\u7ef4\u5bfc\u56fe",
         "\u67b6\u6784\u56fe", "diagram", "flowchart", "mermaid", "draw a ",
     )
-    return any(term in value for term in (*code_terms, *diagram_terms))
+    task_terms = (
+        "自动化", "批量处理", "批量生成", "数据分析", "统计图", "生成图表",
+        "转换文件", "整理文件", "抓取数据", "计算结果", "模拟", "可视化",
+        "写一个工具", "做一个工具", "生成图片", "画一张图", "处理数据",
+        "automation", "batch process", "data analysis", "visualize", "generate an image",
+    )
+    return any(term in value for term in (*code_terms, *diagram_terms, *task_terms))
 
 
 class WebActionPlan(BaseModel):
