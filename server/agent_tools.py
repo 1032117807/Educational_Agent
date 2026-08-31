@@ -288,7 +288,7 @@ class WebAgentToolExecutor:
         path = (self.workspace / relative_path).resolve()
         if path != self.workspace and self.workspace not in path.parents:
             raise PermissionError("workspace path escapes its session")
-        if writable and path.suffix.lower() not in {".py", ".md", ".json", ".toml", ".txt", ".yaml", ".yml"}:
+        if writable and path.suffix.lower() not in {".py", ".md", ".mmd", ".json", ".toml", ".txt", ".yaml", ".yml"}:
             raise PermissionError("file type is not writable")
         return path
 
