@@ -38,14 +38,16 @@
       card.innerHTML = '<strong>Agent 运行过程</strong><div class="agent-trace-list"></div>';
       root.appendChild(card);
     }
-    const key = payload.key || payload.kind || payload.label || 'step';
+    const key = payload.key || payload.call_id || (payload.tool_name ? `tool-${payload.tool_name}-${payload.sequence || Date.now()}` : payload.kind || payload.label || 'step');
     let row = card.querySelector(`[data-activity-key="${CSS.escape(String(key))}"]`);
     if (!row) row = document.createElement('div');
     row.dataset.activityKey = String(key);
     row.className = `agent-trace-row ${text(payload.state || 'running')}`;
     const icon = document.createElement('span'); icon.className = 'agent-trace-icon'; icon.textContent = activityIcon(payload.kind);
-    const label = document.createElement('b'); label.textContent = activityLabel(payload.label || '运行步骤');
-    const detail = document.createElement('span'); detail.className = 'agent-trace-detail'; detail.textContent = payload.detail || '';
+    const label = document.createElement('b'); label.textContent = payload.tool_name || activityLabel(payload.label || '运行步骤');
+    const meta = [payload.state, payload.duration_ms != null ? `${payload.duration_ms} ms` : '', payload.result_summary || ''].filter(Boolean).join(' · ');
+    const detail = document.createElement('span'); detail.className = 'agent-trace-detail'; detail.textContent = [payload.detail || '', meta].filter(Boolean).join(' | ');
+    if (payload.error) detail.textContent += ` | 错误：${payload.error}`;
     row.replaceChildren(icon, label, detail);
     if (!row.parentElement) card.querySelector('.agent-trace-list').appendChild(row);
     if (payload.kind === 'complete') card.dataset.live = 'false';
